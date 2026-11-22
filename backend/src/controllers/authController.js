@@ -1,64 +1,84 @@
 const Customer = require('../models/Customer');
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt');
-const nodemailer = require('nodemailer');
-const crypto = require('crypto');
 const config = require('../utils/config');
 
-// Generate JWT Token
-const generateToken = (customerId) => {
-  return jwt.sign({ id: customerId }, config.SECRET_KEY, { expiresIn: '7d' });
+// Generate JWT Token with id and role
+const generateToken = (user) => {
+  return jwt.sign(
+    { id: user._id, role: user.role },
+    config.SECRET_KEY,
+    { expiresIn: '7d' }
+  );
 };
 
-// Email transporter setup (disabled for now - logging instead)
-const createEmailTransporter = () => {
-  console.log('📧 Email service disabled - using logging instead');
-  return null;
-};
-
-// Customer Registration
-exports.customerRegister = async (req, res) => {
+// Register Campus User
+const register = async (req, res) => {
   try {
-    const { username, email, password, name, phone } = req.body;
+    const {
+      name,
+      username,
+      email,
+      phone,
+      password,
+      role = 'requester',
+      campusId,
+      department,
+      defaultCampusNode
+    } = req.body;
 
-    // Check if customer already exists
-    const existingCustomer = await Customer.findOne({
-      $or: [{ email }, { username }]
-    });
-
-    if (existingCustomer) {
+    if (!name || !username || !email || !password) {
       return res.status(400).json({
         success: false,
-        message: 'Customer with this email or username already exists'
+        message: 'Name, username, email, and password are required'
       });
     }
 
-    // Create new customer
+    // Validate role
+    const validRoles = ['requester', 'driver', 'mailroom', 'admin'];
+    if (role && !validRoles.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid role. Allowed roles: ${validRoles.join(', ')}`
+      });
+    }
+
+    // Check existing customer
+    const existing = await Customer.findOne({
+      $or: [{ email: email.toLowerCase() }, { username }]
+    });
+
+    if (existing) {
+      return res.status(400).json({
+        success: false,
+        message: 'User with this email or username already exists'
+      });
+    }
+
+    // Create customer (pre-save hook hashes password with bcrypt)
     const customer = new Customer({
-      username,
-      email,
-      password,
       name,
-      phone
+      username,
+      email: email.toLowerCase(),
+      phone,
+      password,
+      role,
+      campusId,
+      department,
+      defaultCampusNode
     });
 
     await customer.save();
 
-    // Generate token
-    const token = generateToken(customer._id);
-
-    // Email service removed - no notifications will be sent
-    console.log('📧 Customer registered successfully - email notifications disabled');
+    const token = generateToken(customer);
 
     res.status(201).json({
       success: true,
-      message: 'Customer registered successfully',
+      message: 'User registered successfully',
       data: {
         customer: customer.toJSON(),
         token
       }
     });
-
   } catch (error) {
     console.error('Registration error:', error);
     res.status(500).json({
@@ -69,31 +89,45 @@ exports.customerRegister = async (req, res) => {
   }
 };
 
-// Customer Login
-exports.customerLogin = async (req, res) => {
+// Login Campus User
+const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, username, password } = req.body;
 
-    // Find customer
-    const customer = await Customer.findOne({ email });
+    if ((!email && !username) || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email/username and password are required'
+      });
+    }
+
+    // Find user by email or username
+    const query = email ? { email: email.toLowerCase() } : { username };
+    const customer = await Customer.findOne(query);
+
     if (!customer) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid email or password'
+        message: 'Invalid credentials'
       });
     }
 
-    // Check password
-    const isPasswordValid = await customer.comparePassword(password);
-    if (!isPasswordValid) {
+    if (!customer.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: 'Account is deactivated. Please contact campus administrator.'
+      });
+    }
+
+    const isMatch = await customer.comparePassword(password);
+    if (!isMatch) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid email or password'
+        message: 'Invalid credentials'
       });
     }
 
-    // Generate token
-    const token = generateToken(customer._id);
+    const token = generateToken(customer);
 
     res.status(200).json({
       success: true,
@@ -103,7 +137,6 @@ exports.customerLogin = async (req, res) => {
         token
       }
     });
-
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({
@@ -114,108 +147,49 @@ exports.customerLogin = async (req, res) => {
   }
 };
 
-// Customer Logout (mainly for session cleanup)
-exports.customerLogout = (req, res) => {
-  // For JWT, logout is handled client-side by removing the token
-  // For session-based auth, destroy session
-  if (req.session) {
-    req.session.destroy((err) => {
-      if (err) {
-        return res.status(500).json({
-          success: false,
-          message: 'Logout failed'
-        });
-      }
-    });
-  }
-
-  res.status(200).json({
-    success: true,
-    message: 'Logged out successfully'
-  });
-};
-
-// Validate Username
-exports.validateUsername = async (req, res) => {
+// Get Current Logged-in User Profile
+const getMe = async (req, res) => {
   try {
-    const { username } = req.params;
-    const existingCustomer = await Customer.findOne({ username });
-    
-    res.status(200).json({
-      success: true,
-      available: !existingCustomer
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Validation failed',
-      error: error.message
-    });
-  }
-};
-
-// Validate Email
-exports.validateEmail = async (req, res) => {
-  try {
-    const { email } = req.params;
-    const existingCustomer = await Customer.findOne({ email });
-    
-    res.status(200).json({
-      success: true,
-      available: !existingCustomer
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Validation failed',
-      error: error.message
-    });
-  }
-};
-
-// Get Current Customer
-exports.getCurrentCustomer = async (req, res) => {
-  try {
+    const customer = await Customer.findById(req.user._id).select('-password');
     res.status(200).json({
       success: true,
       data: {
-        customer: req.customer.toJSON()
+        customer: customer.toJSON()
       }
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Failed to get customer data',
+      message: 'Failed to retrieve profile',
       error: error.message
     });
   }
 };
 
-// Update Customer Profile
-exports.updateCustomer = async (req, res) => {
+// Update Profile
+const updateProfile = async (req, res) => {
   try {
-    const customerId = req.customer._id;
-    const updateData = req.body;
-    
-    // Remove sensitive fields that shouldn't be updated directly
-    delete updateData.password;
-    delete updateData.resetPasswordToken;
-    delete updateData.resetPasswordExpires;
+    const allowedUpdates = ['name', 'phone', 'department', 'defaultCampusNode'];
+    const updates = {};
+    for (const key of allowedUpdates) {
+      if (req.body[key] !== undefined) {
+        updates[key] = req.body[key];
+      }
+    }
 
-    const updatedCustomer = await Customer.findByIdAndUpdate(
-      customerId,
-      updateData,
+    const updated = await Customer.findByIdAndUpdate(
+      req.user._id,
+      updates,
       { new: true, runValidators: true }
-    );
+    ).select('-password');
 
     res.status(200).json({
       success: true,
       message: 'Profile updated successfully',
       data: {
-        customer: updatedCustomer.toJSON()
+        customer: updated.toJSON()
       }
     });
-
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -225,86 +199,62 @@ exports.updateCustomer = async (req, res) => {
   }
 };
 
-// Forgot Password
-exports.forgotPassword = async (req, res) => {
+// Validate Username Availability
+const validateUsername = async (req, res) => {
   try {
-    const { email } = req.body;
-    const customer = await Customer.findOne({ email });
-
-    if (!customer) {
-      return res.status(404).json({
-        success: false,
-        message: 'Customer not found with this email'
-      });
-    }
-
-    // Generate reset token
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    customer.resetPasswordToken = resetToken;
-    customer.resetPasswordExpires = Date.now() + 3600000; // 1 hour
-
-    await customer.save();
-
-    // Email service disabled - just log the reset token
-    console.log('🔑 Password reset requested for:', email);
-    console.log('🔑 Reset token (for testing):', resetToken);
-    console.log('📧 Email notifications disabled - password reset token logged instead');
-
+    const { username } = req.params;
+    const existing = await Customer.findOne({ username });
     res.status(200).json({
       success: true,
-      message: 'Password reset requested - check server logs for token (email service disabled)',
-      data: {
-        resetToken: resetToken // Only for development - remove in production
-      }
+      available: !existing
     });
-
   } catch (error) {
-    console.error('Forgot password error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to process reset request',
+      message: 'Validation failed',
       error: error.message
     });
   }
 };
 
-// Reset Password
-exports.resetPassword = async (req, res) => {
+// Validate Email Availability
+const validateEmail = async (req, res) => {
   try {
-    const { token, newPassword } = req.body;
-
-    const customer = await Customer.findOne({
-      resetPasswordToken: token,
-      resetPasswordExpires: { $gt: Date.now() }
-    });
-
-    if (!customer) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid or expired reset token'
-      });
-    }
-
-    // Update password
-    customer.password = newPassword;
-    customer.resetPasswordToken = undefined;
-    customer.resetPasswordExpires = undefined;
-
-    await customer.save();
-
-    console.log('🔑 Password reset successfully for customer:', customer.email);
-
+    const { email } = req.params;
+    const existing = await Customer.findOne({ email: email.toLowerCase() });
     res.status(200).json({
       success: true,
-      message: 'Password reset successfully'
+      available: !existing
     });
-
   } catch (error) {
-    console.error('Reset password error:', error);
     res.status(500).json({
       success: false,
-      message: 'Password reset failed',
+      message: 'Validation failed',
       error: error.message
     });
   }
+};
+
+// Logout
+const logout = (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Logged out successfully'
+  });
+};
+
+module.exports = {
+  register,
+  login,
+  getMe,
+  updateProfile,
+  validateUsername,
+  validateEmail,
+  logout,
+  // Aliases for compatibility
+  customerRegister: register,
+  customerLogin: login,
+  customerLogout: logout,
+  getCurrentCustomer: getMe,
+  updateCustomer: updateProfile
 };

@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const notificationSchema = new mongoose.Schema({
   recipientType: {
     type: String,
-    enum: ['AGENT', 'HUB_MANAGER', 'CUSTOMER', 'ADMIN'],
+    enum: ['DRIVER', 'MAILROOM', 'REQUESTER', 'ADMIN'],
     required: true
   },
   recipientId: {
@@ -13,55 +13,44 @@ const notificationSchema = new mongoose.Schema({
   },
   recipientModel: {
     type: String,
-    enum: ['DeliveryAgent', 'DeliveryHub', 'Customer', 'User'],
+    enum: ['DeliveryAgent', 'DeliveryHub', 'CampusNode', 'Customer', 'User'],
     required: true
   },
   orderId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Order',
-    required: true
+    ref: 'Order'
   },
   type: {
     type: String,
     enum: [
-      'PICKUP_ASSIGNED',
-      'PICKUP_READY',
-      'PICKUP_COMPLETED',
-      'DELIVERY_ASSIGNED',
-      'DELIVERY_READY',
-      'DELIVERY_COMPLETED',
-      'HUB_RECEIVED',
-      'HUB_DISPATCHED',
-      'INCOMING_PACKAGE',
-      'STATUS_UPDATE',
-      'DELAY_ALERT',
-      'DELIVERY_ATTEMPT_FAILED'
+      'REQUEST_CREATED',
+      'APPROVAL_REQUIRED',
+      'DRIVER_ASSIGNED',
+      'PICKED_UP',
+      'IN_TRANSIT',
+      'DELIVERED',
+      'DELIVERY_ATTEMPTED',
+      'CANCELLED'
     ],
     required: true
   },
   title: {
     type: String,
-    required: true
+    required: true,
+    trim: true
   },
   message: {
     type: String,
-    required: true
+    required: true,
+    trim: true
   },
   data: {
-    orderId: String,
-    sellerOrderId: String,
-    customerName: String,
-    pickupAddress: String,
-    deliveryAddress: String,
-    priority: String,
-    expectedTime: Date,
-    actionUrl: String
+    type: mongoose.Schema.Types.Mixed
   },
   channels: {
     push: { type: Boolean, default: true },
     sms: { type: Boolean, default: false },
-    email: { type: Boolean, default: false },
-    whatsapp: { type: Boolean, default: false }
+    email: { type: Boolean, default: false }
   },
   status: {
     type: String,
@@ -92,7 +81,7 @@ notificationSchema.index({ orderId: 1 });
 notificationSchema.index({ status: 1, createdAt: -1 });
 notificationSchema.index({ type: 1, createdAt: -1 });
 
-// Methods
+// Instance methods
 notificationSchema.methods.markAsRead = function() {
   this.status = 'READ';
   this.readAt = new Date();
@@ -117,79 +106,6 @@ notificationSchema.methods.markAsFailed = function(errorMessage) {
   this.attempts += 1;
   this.lastAttemptAt = new Date();
   return this.save();
-};
-
-// Static methods
-notificationSchema.statics.createPickupNotification = function(order, agent) {
-  return this.create({
-    recipientType: 'AGENT',
-    recipientId: agent._id,
-    recipientModel: 'DeliveryAgent',
-    orderId: order._id,
-    type: 'PICKUP_ASSIGNED',
-    title: 'New Pickup Assigned',
-    message: `You have been assigned a new pickup: ${order.sellerOrderId}`,
-    data: {
-      orderId: order._id.toString(),
-      sellerOrderId: order.sellerOrderId,
-      customerName: order.recipientDetails.name,
-      pickupAddress: `${order.pickupAddress.addressLine1}, ${order.pickupAddress.city}`,
-      priority: order.priority,
-      actionUrl: `/agent/pickup/${order._id}`
-    },
-    channels: {
-      push: true,
-      sms: agent.notifications?.sms || false
-    }
-  });
-};
-
-notificationSchema.statics.createDeliveryNotification = function(order, agent) {
-  return this.create({
-    recipientType: 'AGENT',
-    recipientId: agent._id,
-    recipientModel: 'DeliveryAgent',
-    orderId: order._id,
-    type: 'DELIVERY_ASSIGNED',
-    title: 'New Delivery Assigned',
-    message: `You have been assigned a new delivery: ${order.sellerOrderId}`,
-    data: {
-      orderId: order._id.toString(),
-      sellerOrderId: order.sellerOrderId,
-      customerName: order.recipientDetails.name,
-      deliveryAddress: `${order.recipientDetails.address.addressLine1}, ${order.recipientDetails.address.city}`,
-      priority: order.priority,
-      actionUrl: `/agent/delivery/${order._id}`
-    },
-    channels: {
-      push: true,
-      sms: agent.notifications?.sms || false
-    }
-  });
-};
-
-notificationSchema.statics.createStatusUpdateNotification = function(order, status, location) {
-  // Notify customer about status update
-  return this.create({
-    recipientType: 'CUSTOMER',
-    recipientId: order.customerId,
-    recipientModel: 'Customer',
-    orderId: order._id,
-    type: 'STATUS_UPDATE',
-    title: 'Order Status Update',
-    message: `Your order ${order.sellerOrderId} is now ${status.toLowerCase().replace('_', ' ')}`,
-    data: {
-      orderId: order._id.toString(),
-      sellerOrderId: order.sellerOrderId,
-      status: status,
-      location: location,
-      actionUrl: `/track/${order._id}`
-    },
-    channels: {
-      push: true,
-      sms: true
-    }
-  });
 };
 
 module.exports = mongoose.model('Notification', notificationSchema);

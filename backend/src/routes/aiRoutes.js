@@ -1,250 +1,188 @@
-/**
- * 🗺️ AI Route Optimization Routes
- * Testing endpoints for Gemini-powered route optimization and time estimation
- */
-
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const aiService = require('../services/aiService');
-const { DeliveryHub } = require('../models/Delivery');
-const { authenticate } = require('../middleware/auth');
+const { DeliveryHub, DeliveryVehicle, DeliveryAgent } = require('../models/Delivery');
+const Order = require('../models/Order');
+const { protect, authorizeRoles } = require('../middleware/auth');
 
-// 🗺️ Test Route Optimization
-router.post('/optimize-route', authenticate, async (req, res) => {
-  try {
-    const { pickupLocation, deliveryLocation, waypoints } = req.body;
+// Protect all AI routes with JWT authentication
+router.use(protect);
 
-    console.log('🗺️ Processing route optimization request...');
-    
-    // Validate input
-    if (!pickupLocation || !deliveryLocation) {
-      return res.status(400).json({
-        success: false,
-        message: 'Pickup and delivery locations are required'
-      });
-    }
-
-    // Call AI service for route optimization
-    const routeOptimization = await aiService.optimizeRoute(
-      pickupLocation, 
-      deliveryLocation, 
-      waypoints || []
-    );
-
-    console.log('✅ Route optimization completed successfully');
-
-    res.json({
-      success: true,
-      message: 'Route optimization completed',
-      data: {
-        pickup: pickupLocation,
-        delivery: deliveryLocation,
-        waypoints: waypoints || [],
-        optimization: routeOptimization,
-        timestamp: new Date().toISOString()
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Route optimization error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Route optimization failed',
-      error: error.message
-    });
-  }
-});
-
-// 🚛 Test Multi-Hub Route Planning
-router.post('/plan-multi-hub-route', authenticate, async (req, res) => {
-  try {
-    const { orderData } = req.body;
-
-    console.log('🚛 Processing multi-hub route planning...');
-
-    // Validate input
-    if (!orderData || !orderData.pickupAddress || !orderData.recipientDetails) {
-      return res.status(400).json({
-        success: false,
-        message: 'Complete order data with pickup and delivery addresses required'
-      });
-    }
-
-    // Get available hub network
-    const hubNetwork = await DeliveryHub.find({ isActive: true })
-      .select('hubId hubName city state capacity')
-      .limit(20);
-
-    if (hubNetwork.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'No active delivery hubs found'
-      });
-    }
-
-    // Call AI service for multi-hub route planning
-    const routePlan = await aiService.planMultiHubRoute(orderData, hubNetwork);
-
-    console.log('✅ Multi-hub route planning completed successfully');
-
-    res.json({
-      success: true,
-      message: 'Multi-hub route planning completed',
-      data: {
-        orderDetails: {
-          pickup: orderData.pickupAddress,
-          delivery: orderData.recipientDetails.address,
-          weight: orderData.packageDetails?.deadWeight_kg,
-          priority: orderData.priority
-        },
-        availableHubs: hubNetwork.length,
-        routePlan: routePlan,
-        timestamp: new Date().toISOString()
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Multi-hub route planning error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Multi-hub route planning failed',
-      error: error.message
-    });
-  }
-});
-
-// ⏱️ Test Enhanced Time Estimation
-router.post('/estimate-delivery-time', authenticate, async (req, res) => {
-  try {
-    const { orderData } = req.body;
-
-    console.log('⏱️ Processing enhanced delivery time estimation...');
-
-    // Validate input
-    if (!orderData) {
-      return res.status(400).json({
-        success: false,
-        message: 'Order data is required'
-      });
-    }
-
-    // Call AI service for time estimation
-    const timeEstimation = await aiService.estimateDeliveryTime(orderData);
-
-    console.log('✅ Enhanced time estimation completed successfully');
-
-    res.json({
-      success: true,
-      message: 'Enhanced delivery time estimation completed',
-      data: {
-        orderSummary: {
-          route: `${orderData.pickupAddress?.city} → ${orderData.recipientDetails?.address?.city}`,
-          weight: orderData.packageDetails?.deadWeight_kg,
-          type: orderData.orderType,
-          priority: orderData.priority
-        },
-        timeEstimation: timeEstimation,
-        timestamp: new Date().toISOString()
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Time estimation error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Time estimation failed',
-      error: error.message
-    });
-  }
-});
-
-// 🧪 Test All AI Features
-router.post('/test-all-ai-features', authenticate, async (req, res) => {
-  try {
-    const { orderData } = req.body;
-
-    console.log('🧪 Testing all AI features...');
-
-    // Validate input
-    if (!orderData) {
-      return res.status(400).json({
-        success: false,
-        message: 'Order data is required for comprehensive testing'
-      });
-    }
-
-    const results = {};
-
-    // Test 1: AI Pricing
-    console.log('1️⃣ Testing AI pricing...');
+/**
+ * POST /api/ai/optimize-route
+ * Roles: driver, admin, mailroom
+ * Optimizes route for multiple order stops with priority and Haversine distance
+ */
+router.post(
+  '/optimize-route',
+  authorizeRoles('driver', 'admin', 'mailroom'),
+  async (req, res) => {
     try {
-      results.pricing = await aiService.generatePricing(orderData);
-      results.pricing.status = 'SUCCESS';
-    } catch (error) {
-      results.pricing = { status: 'FAILED', error: error.message };
-    }
+      let { startHubId = 'MAIN-MAILROOM', orderIds, vehicleType } = req.body;
 
-    // Test 2: Time Estimation
-    console.log('2️⃣ Testing time estimation...');
-    try {
-      results.timeEstimation = await aiService.estimateDeliveryTime(orderData);
-      results.timeEstimation.status = 'SUCCESS';
-    } catch (error) {
-      results.timeEstimation = { status: 'FAILED', error: error.message };
-    }
-
-    // Test 3: Route Optimization
-    console.log('3️⃣ Testing route optimization...');
-    try {
-      results.routeOptimization = await aiService.optimizeRoute(
-        orderData.pickupAddress,
-        orderData.recipientDetails.address
-      );
-      results.routeOptimization.status = 'SUCCESS';
-    } catch (error) {
-      results.routeOptimization = { status: 'FAILED', error: error.message };
-    }
-
-    // Test 4: Multi-Hub Planning
-    console.log('4️⃣ Testing multi-hub planning...');
-    try {
-      const hubNetwork = await DeliveryHub.find({ isActive: true }).limit(10);
-      results.multiHubPlanning = await aiService.planMultiHubRoute(orderData, hubNetwork);
-      results.multiHubPlanning.status = 'SUCCESS';
-    } catch (error) {
-      results.multiHubPlanning = { status: 'FAILED', error: error.message };
-    }
-
-    // Calculate success rate
-    const totalTests = 4;
-    const successfulTests = Object.values(results).filter(r => r.status === 'SUCCESS').length;
-    const successRate = (successfulTests / totalTests * 100).toFixed(1);
-
-    console.log(`✅ AI feature testing completed: ${successfulTests}/${totalTests} tests passed (${successRate}%)`);
-
-    res.json({
-      success: true,
-      message: 'Comprehensive AI feature testing completed',
-      data: {
-        summary: {
-          totalTests,
-          successfulTests,
-          failedTests: totalTests - successfulTests,
-          successRate: `${successRate}%`
-        },
-        results,
-        timestamp: new Date().toISOString()
+      // If driver and orderIds omitted, pull driver's active assigned orders
+      if (!orderIds && req.user.role === 'driver') {
+        const agent = await DeliveryAgent.findOne({ userId: req.user._id });
+        if (agent) {
+          orderIds = agent.assignedOrders || [];
+          if (!vehicleType && agent.assignedVehicleId) {
+            const vehicle = await DeliveryVehicle.findOne({ vehicleId: agent.assignedVehicleId });
+            if (vehicle) vehicleType = vehicle.type;
+          }
+        }
       }
-    });
 
-  } catch (error) {
-    console.error('❌ Comprehensive AI testing error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Comprehensive AI testing failed',
-      error: error.message
-    });
+      // Fetch starting hub
+      const startHub = (await DeliveryHub.findOne({
+        $or: [{ hubId: startHubId }, { code: startHubId }, { aliases: startHubId }]
+      })) || {
+        hubId: 'MAIN-MAILROOM',
+        code: 'MAIN-MAILROOM',
+        name: 'Main Entrance & Mailroom',
+        zone: 'ADMIN',
+        mapPosition: { x: 420, y: 80, z: 0 },
+        dimensions: { width: 90, depth: 45, height: 25 },
+        coordinates: { lat: 12.9258, lng: 77.4983 }
+      };
+
+      // Fetch orders
+      let orders = [];
+      if (Array.isArray(orderIds) && orderIds.length > 0) {
+        const validObjectIds = orderIds.filter((id) => mongoose.isValidObjectId(id));
+        orders = await Order.find({
+          $or: [
+            { _id: { $in: validObjectIds } },
+            { trackingId: { $in: orderIds } }
+          ]
+        });
+      }
+
+      // Fetch active campus hubs to lookup dropoff coordinates and 3D mapPosition
+      const hubs = await DeliveryHub.find({ isActive: true });
+      const hubMap = new Map();
+      hubs.forEach((h) => {
+        hubMap.set(h.hubId, h);
+        if (h.code) hubMap.set(h.code, h);
+        if (Array.isArray(h.aliases)) {
+          h.aliases.forEach((alias) => hubMap.set(alias, h));
+        }
+      });
+
+      // Construct stops array with 3D mapPosition & dimensions
+      const stops = orders.map((order) => {
+        const hubId = order.dropoffNode?.hubId || order.dropoffNode?.code;
+        const matchedHub = hubMap.get(hubId);
+        return {
+          orderId: order._id,
+          trackingId: order.trackingId,
+          hubId: hubId,
+          code: matchedHub?.code || hubId,
+          buildingName: order.dropoffNode?.buildingName || matchedHub?.name || hubId,
+          zone: matchedHub?.zone || 'ACADEMIC',
+          mapPosition: matchedHub?.mapPosition || { x: 420, y: 80, z: 0 },
+          dimensions: matchedHub?.dimensions || { width: 80, depth: 60, height: 35 },
+          coordinates: matchedHub?.coordinates || startHub.coordinates,
+          priority: order.priority || 'STANDARD',
+          isFragile: Boolean(order.cargoDetails?.isFragile)
+        };
+      });
+
+      const optimization = await aiService.optimizeCampusRoute({
+        startHub,
+        stops,
+        vehicleType: vehicleType || 'ECART'
+      });
+
+      res.status(200).json({
+        success: true,
+        data: optimization
+      });
+    } catch (error) {
+      console.error('Error optimizing campus route:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to optimize campus route',
+        error: error.message
+      });
+    }
   }
-});
+);
+
+/**
+ * POST /api/ai/recommend-dispatch
+ * Roles: requester, admin, mailroom
+ * Evaluates building pedestrian restrictions & load capacity to recommend best fleet vehicle
+ */
+router.post(
+  '/recommend-dispatch',
+  authorizeRoles('requester', 'admin', 'mailroom'),
+  async (req, res) => {
+    try {
+      const {
+        pickupHubId,
+        dropoffHubId,
+        weightKg = 0,
+        isFragile = false,
+        priority = 'STANDARD'
+      } = req.body;
+
+      if (!pickupHubId || !dropoffHubId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Both pickupHubId and dropoffHubId are required'
+        });
+      }
+
+      // Fetch pickup and dropoff hubs
+      const [pickupNode, dropoffNode, availableVehicles] = await Promise.all([
+        DeliveryHub.findOne({
+          $or: [{ hubId: pickupHubId }, { code: pickupHubId }, { aliases: pickupHubId }],
+          isActive: true
+        }),
+        DeliveryHub.findOne({
+          $or: [{ hubId: dropoffHubId }, { code: dropoffHubId }, { aliases: dropoffHubId }],
+          isActive: true
+        }),
+        DeliveryVehicle.find({ isActive: true })
+      ]);
+
+      if (!pickupNode) {
+        return res.status(400).json({
+          success: false,
+          message: `Pickup node '${pickupHubId}' not found or inactive`
+        });
+      }
+
+      if (!dropoffNode) {
+        return res.status(400).json({
+          success: false,
+          message: `Dropoff node '${dropoffHubId}' not found or inactive`
+        });
+      }
+
+      const recommendation = await aiService.recommendDispatch({
+        pickupNode,
+        dropoffNode,
+        weightKg: Number(weightKg) || 0,
+        isFragile: Boolean(isFragile),
+        priority,
+        availableVehicles
+      });
+
+      res.status(200).json({
+        success: true,
+        data: recommendation
+      });
+    } catch (error) {
+      console.error('Error recommending vehicle dispatch:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to recommend vehicle dispatch',
+        error: error.message
+      });
+    }
+  }
+);
 
 module.exports = router;

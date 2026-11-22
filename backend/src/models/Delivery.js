@@ -1,177 +1,228 @@
 const mongoose = require('mongoose');
 
+// DeliveryHub / CampusNode (Campus Nodes/Buildings in 3D & Geo Coordinates)
 const deliveryHubSchema = new mongoose.Schema({
+  code: {
+    type: String,
+    unique: true,
+    sparse: true,
+    trim: true
+  },
   hubId: {
     type: String,
     required: true,
-    unique: true
+    unique: true,
+    trim: true
   },
-  state: {
+  name: {
     type: String,
+    required: true,
+    trim: true
+  },
+  zone: {
+    type: String,
+    enum: ['ADMIN', 'ACADEMIC', 'HOSTEL', 'SPORTS', 'UTILITY'],
     required: true
   },
-  city: {
-    type: String,
-    required: true
-  },
-  area: {
-    type: String,
-    enum: ['NORTH', 'SOUTH', 'EAST', 'WEST', 'CENTRAL'],
-    required: true
-  },
-  address: {
-    addressLine1: String,
-    addressLine2: String,
-    pincode: String,
-    coordinates: {
-      lat: Number,
-      lng: Number
+  mapPosition: {
+    x: {
+      type: Number,
+      required: true
+    },
+    y: {
+      type: Number,
+      required: true
+    },
+    z: {
+      type: Number,
+      default: 0
     }
   },
-  capacity: {
-    maxOrders: { type: Number, default: 1000 },
-    currentLoad: { type: Number, default: 0 },
-    maxWeight_kg: { type: Number, default: 10000 }
+  dimensions: {
+    width: {
+      type: Number,
+      default: 80
+    },
+    depth: {
+      type: Number,
+      default: 60
+    },
+    height: {
+      type: Number,
+      default: 35
+    }
   },
-  operatingHours: {
-    start: String, // "09:00"
-    end: String,   // "21:00"
-    timezone: { type: String, default: 'Asia/Kolkata' }
+  coordinates: {
+    lat: {
+      type: Number
+    },
+    lng: {
+      type: Number
+    }
   },
-  serviceAreas: [String], // Array of pincodes this hub serves
-  isActive: { type: Boolean, default: true }
+  isPedestrianOnly: {
+    type: Boolean,
+    default: false
+  },
+  accessibleBy: [{
+    type: String,
+    enum: ['VAN', 'ECART', 'CARGO_BIKE', 'HAND_TROLLEY']
+  }],
+  isMailroom: {
+    type: Boolean,
+    default: false
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  aliases: [{
+    type: String,
+    trim: true
+  }]
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+// Auto-sync code and hubId, and assign vehicle accessibility according to pedestrian status
+deliveryHubSchema.pre('validate', function(next) {
+  if (!this.code && this.hubId) {
+    this.code = this.hubId;
+  }
+  if (!this.hubId && this.code) {
+    this.hubId = this.code;
+  }
+  if (this.isPedestrianOnly) {
+    if (!this.accessibleBy || this.accessibleBy.length === 0) {
+      this.accessibleBy = ['ECART', 'HAND_TROLLEY'];
+    }
+  } else if (!this.accessibleBy || this.accessibleBy.length === 0) {
+    this.accessibleBy = ['VAN', 'ECART', 'CARGO_BIKE', 'HAND_TROLLEY'];
+  }
+  next();
+});
+
+// DeliveryVehicle (Campus Fleet)
+const deliveryVehicleSchema = new mongoose.Schema({
+  vehicleId: {
+    type: String,
+    required: true,
+    unique: true,
+    trim: true
+  },
+  name: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  type: {
+    type: String,
+    enum: ['VAN', 'ECART', 'CARGO_BIKE', 'HAND_TROLLEY'],
+    required: true
+  },
+  registrationNumber: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  maxWeightKg: {
+    type: Number,
+    required: true
+  },
+  currentLoadKg: {
+    type: Number,
+    default: 0
+  },
+  status: {
+    type: String,
+    enum: ['AVAILABLE', 'IN_TRANSIT', 'MAINTENANCE'],
+    default: 'AVAILABLE'
+  },
+  currentHubId: {
+    type: String,
+    trim: true
+  },
+  assignedOrders: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Order'
+  }],
+  isActive: {
+    type: Boolean,
+    default: true
+  }
 }, {
   timestamps: true
 });
 
+// DeliveryAgent (Campus Drivers/Operators)
 const deliveryAgentSchema = new mongoose.Schema({
   agentId: {
     type: String,
     required: true,
-    unique: true
+    unique: true,
+    trim: true
+  },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Customer'
   },
   name: {
     type: String,
-    required: true
+    required: true,
+    trim: true
   },
   phone: {
     type: String,
-    required: true
+    required: true,
+    trim: true
   },
-  email: String,
-  hubId: {
+  email: {
     type: String,
-    required: true
+    trim: true
   },
-  area: {
+  assignedZone: {
     type: String,
-    enum: ['NORTH', 'SOUTH', 'EAST', 'WEST', 'CENTRAL'],
-    required: true
+    trim: true
   },
-  vehicleType: {
+  assignedVehicleId: {
     type: String,
-    enum: ['BIKE', 'SCOOTER', 'CYCLE', 'VAN'],
-    default: 'BIKE'
-  },
-  vehicleNumber: String,
-  currentCapacity: {
-    maxOrders: { type: Number, default: 20 },
-    currentOrders: { type: Number, default: 0 },
-    maxWeight_kg: { type: Number, default: 50 }
-  },
-  ratings: {
-    average: { type: Number, default: 5.0 },
-    totalRatings: { type: Number, default: 0 }
+    trim: true
   },
   status: {
     type: String,
-    enum: ['AVAILABLE', 'ON_DELIVERY', 'OFF_DUTY', 'BREAK'],
+    enum: ['AVAILABLE', 'ON_DELIVERY', 'OFF_DUTY'],
     default: 'AVAILABLE'
   },
   currentLocation: {
     lat: Number,
     lng: Number,
-    lastUpdated: Date
+    lastUpdated: {
+      type: Date,
+      default: Date.now
+    }
   },
   assignedOrders: [{
-    orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
-    assignedAt: Date,
-    priority: String
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Order'
   }],
-  workingHours: {
-    start: String,
-    end: String
-  },
-  isActive: { type: Boolean, default: true }
-}, {
-  timestamps: true
-});
-
-const deliveryVehicleSchema = new mongoose.Schema({
-  vehicleId: {
-    type: String,
-    required: true,
-    unique: true
-  },
-  type: {
-    type: String,
-    enum: ['MINI_TRUCK', 'TRUCK', 'TEMPO', 'CONTAINER'],
-    required: true
-  },
-  registrationNumber: {
-    type: String,
-    required: true
-  },
-  capacity: {
-    maxWeight_kg: { type: Number, required: true },
-    maxVolume_cbm: { type: Number, required: true },
-    maxOrders: { type: Number, default: 500 }
-  },
-  route: {
-    fromState: String,
-    toState: String,
-    serviceStates: [String]
-  },
-  driver: {
-    name: String,
-    phone: String,
-    licenseNumber: String
-  },
-  status: {
-    type: String,
-    enum: ['AVAILABLE', 'IN_TRANSIT', 'LOADING', 'MAINTENANCE'],
-    default: 'AVAILABLE'
-  },
-  currentLocation: {
-    state: String,
-    city: String,
-    coordinates: {
-      lat: Number,
-      lng: Number
-    },
-    lastUpdated: Date
-  },
-  assignedOrders: [{
-    orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
-    loadedAt: Date,
-    priority: String
-  }],
-  maintenanceSchedule: {
-    lastService: Date,
-    nextService: Date,
-    kmTravelled: { type: Number, default: 0 }
-  },
-  isActive: { type: Boolean, default: true }
+  isActive: {
+    type: Boolean,
+    default: true
+  }
 }, {
   timestamps: true
 });
 
 const DeliveryHub = mongoose.model('DeliveryHub', deliveryHubSchema);
+const CampusNode = DeliveryHub;
 const DeliveryAgent = mongoose.model('DeliveryAgent', deliveryAgentSchema);
 const DeliveryVehicle = mongoose.model('DeliveryVehicle', deliveryVehicleSchema);
 
 module.exports = {
   DeliveryHub,
+  CampusNode,
   DeliveryAgent,
   DeliveryVehicle
 };

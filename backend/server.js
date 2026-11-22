@@ -4,26 +4,36 @@ const cors = require('cors');
 const session = require('express-session');
 const passport = require('passport');
 
-// Import centralized configuration
+// Centralized configuration
 const config = require('./src/utils/config');
+const seedDatabase = require('./test/seedDatabase');
 
-// Import routes
+// Routes
+const authRoutes = require('./src/routes/authRoutes');
 const orderRoutes = require('./src/routes/orderRoutes');
 const deliveryRoutes = require('./src/routes/deliveryRoutes');
-const pricingRoutes = require('./src/routes/pricingRoutes');
-const customerRoutes = require('./src/routes/customerRoutes');
-const docsRoutes = require('./src/routes/docsRoutes');
-const workflowRoutes = require('./src/routes/workflowRoutes');
-const authRoutes = require('./src/routes/authRoutes');
-const paymentRoutes = require('./src/routes/paymentRoutes');
 const aiRoutes = require('./src/routes/aiRoutes');
+const docsRoutes = require('./src/routes/docsRoutes');
+const deliveryController = require('./src/controllers/deliveryController');
 
 const app = express();
-const PORT = config.PORT;
+const PORT = config.PORT || 3000;
 
-// CORS configuration
+// CORS configuration supporting frontend URL
+const allowedOrigins = [
+  config.FRONTEND_URL || 'http://localhost:5173',
+  'http://localhost:5173',
+  'http://localhost:3000'
+];
+
 app.use(cors({
-  origin: [config.FRONTEND_URL, config.ADMIN_URL, config.CLIENT_URL],
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps, curl, postman)
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(null, true); // Permissive in dev
+  },
   credentials: true
 }));
 
@@ -33,8 +43,8 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: false, // Set to true in production with HTTPS
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    secure: config.NODE_ENV === 'production',
+    maxAge: 24 * 60 * 60 * 1000
   }
 }));
 
@@ -46,52 +56,82 @@ app.use(passport.session());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files (uploads)
+// Serve static files
 app.use('/uploads', express.static('uploads'));
 
-// Connect to MongoDB
-mongoose.connect(config.MONGO_URI, {
-  maxPoolSize: 10,
-  serverSelectionTimeoutMS: 5000,
-  socketTimeoutMS: 45000,
-})
-.then(() => {
-  console.log('Connected to MongoDB');
-})
-.catch((error) => {
-  console.error('MongoDB connection error:', error);
-  process.exit(1);
-});
+// In-Memory MongoDB Server Instance
+let mongoMemoryServer = null;
 
-// Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/payments', paymentRoutes);
-app.use('/api/orders', orderRoutes);
-app.use('/api/delivery', deliveryRoutes);
-app.use('/api/pricing', pricingRoutes);
-app.use('/api/customers', customerRoutes);
-app.use('/api/workflow', workflowRoutes);
-app.use('/api/ai', aiRoutes);
+/**
+ * Database connection logic with automatic in-memory fallback for local development
+ */
+async function connectDatabase() {
+  const isDev = (process.env.NODE_ENV || 'development') === 'development';
 
-// API Documentation
-app.use('/api/docs', docsRoutes);
+  try {
+    // Attempt standard connection to MONGO_URI
+    await mongoose.connect(config.MONGO_URI, {
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 2000,
+      socketTimeoutMS: 45000
+    });
+    console.log(`Connected to MongoDB at: ${config.MONGO_URI}`);
+  } catch (error) {
+    const isConnRefused =
+      error.message?.includes('ECONNREFUSED') ||
+      error.name === 'MongooseServerSelectionError';
+
+    if (isDev && isConnRefused) {
+      console.log('⚠️  Local MongoDB unavailable (ECONNREFUSED). Initializing In-Memory Fallback...');
+      try {
+        const { MongoMemoryServer } = require('mongodb-memory-server');
+        mongoMemoryServer = await MongoMemoryServer.create();
+        const memoryUri = mongoMemoryServer.getUri();
+
+        await mongoose.connect(memoryUri);
+        console.log(`⚡ Running with in-memory MongoDB + auto-seeded campus data (${memoryUri})`);
+
+        // Automatically seed campus data
+        await seedDatabase(memoryUri, false);
+      } catch (memError) {
+        console.error('❌ Failed to initialize in-memory MongoDB:', memError.message);
+      }
+    } else {
+      console.warn('MongoDB connection warning:', error.message);
+    }
+  }
+}
+
+// Connect to MongoDB if not in test environment
+if (process.env.NODE_ENV !== 'test') {
+  connectDatabase();
+}
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'OK',
-    message: 'AI Logistics System is running',
+    service: 'Campus Freight & Delivery Management System',
     timestamp: new Date().toISOString()
   });
 });
+
+// Mount active routes
+app.get('/api/nodes', (req, res) => deliveryController.getCampusNodes(req, res));
+app.get('/api/nodes/:hubId', (req, res) => deliveryController.getCampusNodeById(req, res));
+app.use('/api/auth', authRoutes);
+app.use('/api/orders', orderRoutes);
+app.use('/api/delivery', deliveryRoutes);
+app.use('/api/ai', aiRoutes);
+app.use('/api/docs', docsRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({
     success: false,
-    message: 'Something went wrong!',
-    error: process.env.NODE_ENV === 'development' ? err.message : {}
+    message: 'Internal server error',
+    error: config.NODE_ENV === 'development' ? err.message : undefined
   });
 });
 
@@ -99,15 +139,26 @@ app.use((err, req, res, next) => {
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
-    message: 'Route not found'
+    message: `Route '${req.originalUrl}' not found`
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server is running on port ${PORT}`);
-  console.log(`📱 API Base URL: http://localhost:${PORT}`);
-  console.log(`🏥 Health Check: http://localhost:${PORT}/health`);
-  console.log(`📚 API Documentation: http://localhost:${PORT}/api/docs`);
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  if (mongoMemoryServer) {
+    await mongoMemoryServer.stop();
+  }
+  process.exit(0);
 });
 
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`🚀 Campus Freight Server running on port ${PORT}`);
+    console.log(`📱 Health check: http://localhost:${PORT}/health`);
+    console.log(`📚 API Docs: http://localhost:${PORT}/api/docs`);
+  });
+}
+
 module.exports = app;
+module.exports.connectDatabase = connectDatabase;
+module.exports.getMongoMemoryServer = () => mongoMemoryServer;

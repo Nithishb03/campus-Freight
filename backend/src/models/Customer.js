@@ -18,62 +18,44 @@ const customerSchema = new mongoose.Schema({
     type: String,
     required: true,
     unique: true,
-    lowercase: true
+    lowercase: true,
+    trim: true
   },
   phone: {
     type: String,
-    required: true
+    trim: true
   },
-  
+
   // Authentication
   password: {
     type: String,
     required: true,
-    minlength: 8
+    minlength: 6
   },
   role: {
     type: String,
-    enum: ['customer', 'admin', 'sub-admin'],
-    default: 'customer'
+    enum: ['requester', 'driver', 'mailroom', 'admin'],
+    default: 'requester'
   },
-  
-  // Password Reset
-  resetPasswordToken: {
+
+  // Campus Attributes
+  campusId: {
     type: String,
-    required: false
+    trim: true
   },
-  resetPasswordExpires: {
-    type: Date,
-    required: false
+  department: {
+    type: String,
+    trim: true
   },
-  addresses: [{
-    type: {
-      type: String,
-      enum: ['home', 'office', 'other'],
-      default: 'home'
-    },
-    addressLine1: String,
-    addressLine2: String,
-    city: String,
-    state: String,
-    pincode: String,
-    country: {
-      type: String,
-      default: 'India'
-    },
-    isDefault: {
-      type: Boolean,
-      default: false
-    }
-  }],
-  loyaltyPoints: {
-    type: Number,
-    default: 0
+  defaultCampusNode: {
+    type: String,
+    trim: true
   },
-  orderHistory: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Order'
-  }]
+
+  isActive: {
+    type: Boolean,
+    default: true
+  }
 }, {
   timestamps: true
 });
@@ -81,7 +63,7 @@ const customerSchema = new mongoose.Schema({
 // Password hashing middleware
 customerSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();
-  
+
   try {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
@@ -96,11 +78,10 @@ customerSchema.methods.comparePassword = async function(candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
 
-// Remove password from JSON output
+// Remove sensitive fields from JSON output
 customerSchema.methods.toJSON = function() {
   const customerObject = this.toObject();
   delete customerObject.password;
-  delete customerObject.resetPasswordToken;
   return customerObject;
 };
 

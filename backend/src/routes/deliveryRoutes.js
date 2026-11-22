@@ -1,30 +1,30 @@
 const express = require('express');
 const router = express.Router();
 const deliveryController = require('../controllers/deliveryController');
+const { protect, authorizeRoles } = require('../middleware/auth');
 
-// Delivery Hub Management
-router.post('/hubs', deliveryController.createDeliveryHub);
-router.get('/hubs', deliveryController.getDeliveryHubs);
-router.put('/hubs/:hubId', deliveryController.updateDeliveryHub);
+// All delivery endpoints require authentication
+router.use(protect);
 
-// Delivery Agent Management
-router.post('/agents', deliveryController.createDeliveryAgent);
-router.get('/agents', deliveryController.getDeliveryAgents);
-router.put('/agents/:agentId', deliveryController.updateDeliveryAgent);
-router.post('/agents/:agentId/assign-orders', deliveryController.assignOrderToAgent);
+// 1. Campus Nodes (Authenticated)
+router.get('/nodes', (req, res) => deliveryController.getCampusNodes(req, res));
+router.get('/nodes/:hubId', (req, res) => deliveryController.getCampusNodeById(req, res));
 
-// Delivery Vehicle Management
-router.post('/vehicles', deliveryController.createDeliveryVehicle);
-router.get('/vehicles', deliveryController.getDeliveryVehicles);
-router.post('/vehicles/:vehicleId/assign-orders', deliveryController.assignOrderToVehicle);
+// 2. Campus Vehicles (Authenticated)
+router.get('/vehicles', (req, res) => deliveryController.getCampusVehicles(req, res));
 
-// Route Optimization
-router.post('/optimize-routes', deliveryController.optimizeDeliveryRoutes);
+// 3. Campus Drivers (Admin / Mailroom only)
+router.get(
+  '/drivers',
+  authorizeRoles('admin', 'mailroom'),
+  (req, res) => deliveryController.getDeliveryDrivers(req, res)
+);
 
-// Analytics
-router.get('/analytics', deliveryController.getDeliveryAnalytics);
-
-// Network Initialization
-router.post('/initialize-network', deliveryController.initializeDeliveryNetwork);
+// 4. Driver Location Update (Driver / Admin only)
+router.put(
+  '/drivers/:agentId/location',
+  authorizeRoles('driver', 'admin'),
+  (req, res) => deliveryController.updateDriverLocation(req, res)
+);
 
 module.exports = router;

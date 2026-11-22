@@ -1,274 +1,96 @@
-# AI-Powered Logistics Management System
+# Campus Freight and Delivery Management System 🚚🏫
 
-A comprehensive, intelligent logistics management system built with Node.js, Express, MongoDB, and React. This system provides dynamic pricing, automated workflows, multi-tier delivery management, and AI-powered route optimization for pan-India logistics operations.
-
-## 🚀 Features
-
-### Backend Features
-- **AI-Powered Dynamic Pricing**: Intelligent pricing based on distance, weight, volume, and delivery zones
-- **Multi-Tier Delivery Network**: Support for metro, tier-1, tier-2, and remote area deliveries
-- **Automated Workflow Management**: Complete order lifecycle automation
-- **Real-time Order Tracking**: Live status updates and delivery notifications
-- **Payment Integration**: Stripe integration for secure payments
-- **Comprehensive API**: RESTful APIs for all operations
-- **Role-based Authentication**: JWT-based auth for customers, admins, and delivery agents
-- **Database Seeding**: Pre-populated with pan-India delivery network data
-
-### Frontend Features (Multi-Role)
-- **Customer Portal**: Order placement, tracking, profile management
-- **Admin Dashboard**: System analytics, order management, network oversight
-- **Delivery Agent App**: Route optimization, status updates, order management
-
-## 🏗️ Architecture
-
-```
-AI Logistics System
-├── Backend (Node.js + Express)
-│   ├── Authentication & Authorization
-│   ├── Order Management
-│   ├── Pricing Engine
-│   ├── Delivery Network
-│   ├── Payment Processing
-│   ├── Workflow Automation
-│   └── Notification System
-├── Frontend (React)
-│   ├── Customer Dashboard
-│   ├── Admin Panel
-│   └── Delivery Agent App
-└── Database (MongoDB)
-    ├── Customers
-    ├── Orders
-    ├── Delivery Network
-    └── Analytics
-```
-
-## 📋 Prerequisites
-
-- Node.js (v16 or higher)
-- MongoDB (local or Atlas)
-- npm or yarn
-- Git
-
-## 🛠️ Installation & Setup
-
-### 1. Clone the Repository
-```bash
-git clone https://github.com/yourusername/ai-logistics-system.git
-cd ai-logistics-system
-```
-
-### 2. Backend Setup
-```bash
-cd backend
-npm install
-```
-
-### 3. Environment Configuration
-Create `.env` file in the backend directory:
-```env
-# Database
-MONGO_URI=mongodb://localhost:27017/logistics_db
-
-# Server
-PORT=3000
-SECRET_KEY=your-secret-key-here
-
-# AI Service
-GEMINI_API_KEY=your-gemini-api-key
-
-# Stripe Payment
-STRIPE_SECRET_KEY=your-stripe-secret-key
-STRIPE_PUBLISH_KEY=your-stripe-publish-key
-
-# URLs
-FRONTEND_URL=http://localhost:3000
-ADMIN_URL=http://localhost:2000
-CLIENT_URL=http://localhost:2001
-```
-
-### 4. Database Seeding
-```bash
-cd backend
-node seedDatabase.js
-```
-
-### 5. Start Backend Server
-```bash
-cd backend
-npm start
-# or
-node server.js
-```
-
-### 6. Frontend Setup (Optional)
-```bash
-cd frontend
-npm install
-npm start
-```
-
-## 📚 API Documentation
-
-### Base URL
-```
-http://localhost:3000
-```
-
-### Health Check
-```bash
-GET /health
-```
-
-### Authentication Endpoints
-- `POST /api/auth/register` - Customer registration
-- `POST /api/auth/login` - Customer login
-- `GET /api/auth/profile` - Get customer profile
-
-### Order Management
-- `POST /api/workflow/orders/create-with-workflow` - Create order with automation
-- `GET /api/orders` - Get customer orders
-- `GET /api/orders/:id/track` - Track specific order
-- `PUT /api/orders/:id/status` - Update order status
-
-### Pricing & Calculations
-- `POST /api/pricing/calculate` - Get dynamic pricing
-- `POST /api/pricing/compare` - Compare pricing options
-- `GET /api/pricing/zonal` - Get zonal pricing
-
-### Delivery Management
-- `GET /api/delivery/agents` - Get available agents
-- `POST /api/delivery/assign-agent` - Assign agent to order
-- `GET /api/delivery/hubs` - Get delivery hubs
-
-### Payment Processing
-- `POST /api/payments/create-intent` - Create payment intent
-- `POST /api/payments/confirm` - Confirm payment
-
-## 🧪 Testing
-
-### Manual API Testing
-Use the provided testing guide:
-```bash
-# See backend/MANUAL_API_TESTING_GUIDE.md for detailed testing instructions
-```
-
-### Sample Test Commands
-```bash
-# Health Check
-curl -X GET http://localhost:3000/health
-
-# Register Customer
-curl -X POST http://localhost:3000/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Test User", "email": "test@example.com", "phone": "9876543210", "password": "password123", "username": "testuser"}'
-
-# Get Pricing
-curl -X POST http://localhost:3000/api/pricing/calculate \
-  -H "Content-Type: application/json" \
-  -d '{"pickupAddress": {"city": "Mumbai", "state": "Maharashtra", "pincode": "400001"}, "deliveryAddress": {"city": "Delhi", "state": "Delhi", "pincode": "110001"}, "packageDetails": {"deadWeight_kg": 2}}'
-```
-
-## 🌍 Coverage
-
-### Geographic Reach
-- **28 Indian States** with complete delivery network
-- **140+ Cities** with dedicated hubs
-- **300+ Delivery Agents** across India
-- **Metro, Tier-1, Tier-2, and Remote** area coverage
-
-### Order Types Supported
-- Normal Delivery
-- Handle with Care
-- By Air (Express)
-- By Road (Standard)
-- Cash on Delivery (COD)
-- Prepaid Orders
-
-## 📊 Sample Data
-
-The system comes pre-seeded with:
-- 6 sample customers
-- 140 delivery hubs across all states
-- 300+ delivery agents
-- 3 interstate vehicles
-- Sample orders with different statuses
-
-## 🔧 Configuration
-
-### MongoDB Connection
-Update `MONGO_URI` in `.env` for your MongoDB instance:
-- Local: `mongodb://localhost:27017/logistics_db`
-- Atlas: `mongodb+srv://username:password@cluster.mongodb.net/logistics_db`
-
-### Payment Integration
-Add your Stripe keys to `.env`:
-- Test keys for development
-- Live keys for production
-
-### AI Services
-Configure Gemini API key for AI-powered features:
-- Route optimization
-- Dynamic pricing
-- Delivery time prediction
-
-## 📁 Project Structure
-
-```
-ai-logistics-system/
-├── backend/
-│   ├── src/
-│   │   ├── controllers/     # API controllers
-│   │   ├── models/         # Database models
-│   │   ├── routes/         # API routes
-│   │   ├── middleware/     # Auth & validation
-│   │   ├── services/       # Business logic
-│   │   └── utils/          # Utilities
-│   ├── uploads/           # File uploads
-│   ├── test/             # Test files
-│   ├── server.js         # Main server file
-│   ├── seedDatabase.js   # Database seeder
-│   └── package.json      # Dependencies
-├── frontend/
-│   ├── src/
-│   │   ├── components/    # React components
-│   │   ├── services/      # API services
-│   │   ├── store/        # State management
-│   │   └── utils/        # Utilities
-│   └── package.json      # Dependencies
-├── .gitignore           # Git ignore rules
-└── README.md           # This file
-```
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🔗 Links
-
-- [API Documentation](http://localhost:3000/api/docs)
-- [Manual Testing Guide](backend/MANUAL_API_TESTING_GUIDE.md)
-- [React Integration Guide](backend/REACT_INTEGRATION_GUIDE.md)
-- [Health Check](http://localhost:3000/health)
-
-## 📞 Support
-
-For support, email ayazpatel701@gmail.com or create an issue in this repository.
-
-## 🏆 Acknowledgments
-
-- Built for modern logistics and e-commerce needs
-- Supports pan-India delivery operations
-- AI-powered for intelligent decision making
-- Scalable architecture for enterprise use
+A modern, robust, institutional logistics and freight management platform designed for universities, research institutes, and large corporate campuses. Built with **React 19**, **Tailwind CSS v4**, **Leaflet Maps**, **Node.js/Express**, and **MongoDB**.
 
 ---
 
-**Happy Coding! 🚀**
+## 🏛️ System Architecture
+
+```
+Campus Freight System
+├── Frontend (React 19 + Tailwind v4 + Leaflet)
+│   ├── Authentication Context & Token Interceptors
+│   ├── Interactive Campus Node Map (OpenStreetMap)
+│   ├── Requester Portal (Freight Booking & OTP Tracking)
+│   ├── Admin & Mailroom Dashboard (Dispatch & Fleet Load Oversight)
+│   └── Driver Console (AI Route Navigation & OTP Verification)
+│
+├── Backend (Node.js + Express REST API)
+│   ├── JWT Authentication & Strict Role-Based Access Control (RBAC)
+│   ├── Core Campus Logistics Engine (Hubs, Fleet, Drivers)
+│   ├── AI Campus Routing & Priority-Weighted Dispatch Engine
+│   └── In-Memory Zero-Friction Dev Database Fallback
+│
+└── Database (MongoDB / In-Memory Fallback)
+    ├── DeliveryHubs (10 Campus Buildings & Accessibility Restrictions)
+    ├── DeliveryVehicles (Vans, E-Carts, Cargo Bikes, Hand Trolleys)
+    ├── Customers (Requesters, Drivers, Mailroom Staff, Admins)
+    └── Orders (Lifecycle States, Cargo Specs, PoD OTPs)
+```
+
+---
+
+## 🛡️ Key Engineering Guardrails
+
+1. **Atomic Vehicle Load Locking:**
+   - Prevents fleet overload by utilizing atomic `DeliveryVehicle.findOneAndUpdate` with MongoDB `$expr` (`currentLoadKg + weightKg <= maxWeightKg`). Automatically rejects over-capacity assignments before they occur and atomically releases vehicle payload upon completed delivery.
+2. **Pedestrian & Building Accessibility Restrictions:**
+   - Enforces physical transit rules across campus zones. Pedestrian walkways and historic buildings (e.g., *Central Library*, *Hostel Blocks*) restrict commercial vans and restrict access to electric carts, cargo bikes, or hand trolleys. The engine automatically rejects incompatible vehicles.
+3. **Fragile & Heavy Cargo Approval Gating:**
+   - Requests marked as fragile or weighing over **50 kg** are automatically routed to `PENDING_APPROVAL` status, preventing driver assignment until reviewed and approved by an administrator or mailroom supervisor.
+4. **Tamper-Resistant Proof-of-Delivery (PoD) OTP:**
+   - Each order generates a secure 4-digit handover OTP visible only to the requester. Drivers must enter the exact OTP to transition the order to `DELIVERED`, triggering real-time vehicle load release.
+5. **Deterministic AI Routing with Gemini Fallback:**
+   - Computes intra-campus transit distances using the **Haversine formula**. Optimizes multi-stop runs using a **Priority-Weighted Nearest-Neighbor** algorithm (`URGENT` cargo prioritized first). When a `GEMINI_API_KEY` is provided, routes are dynamically enhanced with conversational reasoning; if unavailable or rate-limited, the system falls back seamlessly to deterministic computation with zero downtime.
+
+---
+
+## 👥 Demo Login Credentials
+
+The database includes seeded demo accounts for rapid testing and role switching:
+
+| Role | Email | Password | Campus ID | Default Node | Access Scope |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Administrator** | `admin@campus.edu` | `Password@123` | `ADMIN-001` | `ADMIN-BLOCK` | Full system oversight & order approvals |
+| **Mailroom Staff** | `mailroom@campus.edu` | `Password@123` | `STAFF-MR-01` | `MAIN-MAILROOM` | Gate package logging & vehicle dispatch |
+| **Faculty Requester** | `faculty@campus.edu` | `Password@123` | `FAC-CSE-01` | `CSE-BLOCK` | Freight booking & PoD OTP tracking |
+| **Fleet Driver 1** | `driver1@campus.edu` | `Password@123` | `DRV-001` | `MAIN-MAILROOM` | Active runs, route navigator & OTP verification |
+| **Fleet Driver 2** | `driver2@campus.edu` | `Password@123` | `DRV-002` | `MAIN-MAILROOM` | Active runs & delivery completion |
+
+---
+
+## ⚡ Quick Start
+
+### 1. Start the Backend Server
+
+```bash
+cd backend
+npm install
+npm run dev
+```
+
+> **Zero-Friction Dev Setup:** If no local MongoDB service is running, the backend automatically spins up an in-memory MongoDB instance and auto-seeds all 10 campus nodes, 6 fleet vehicles, and 5 demo accounts. To use MongoDB Atlas, simply set `MONGO_URI` in `backend/.env`.
+
+### 2. Start the Frontend App
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Visit **`http://localhost:5173`** in your browser. Use the **Quick-Fill Demo Buttons** on the login page to immediately test any role.
+
+---
+
+## 🧪 Automated Testing
+
+Run the automated test suites inside `backend/`:
+
+```bash
+# Unit & Guardrail Tests
+npm test
+
+# Full 8-Step End-to-End Lifecycle Integration Test
+npm run test:e2e
+```

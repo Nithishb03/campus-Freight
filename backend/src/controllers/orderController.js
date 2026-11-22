@@ -1,331 +1,687 @@
-const logisticsService = require('../services/logisticsService');
+const crypto = require('crypto');
+const mongoose = require('mongoose');
 const Order = require('../models/Order');
+const { DeliveryHub, DeliveryVehicle, DeliveryAgent } = require('../models/Delivery');
+
+/**
+ * Helper to generate a unique CFR tracking ID (e.g. CFR-A1B2C3)
+ */
+const generateTrackingId = () => {
+  return `CFR-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+};
+
+/**
+ * Helper to generate a 4-digit numeric OTP
+ */
+const generateOtp = () => {
+  return Math.floor(1000 + Math.random() * 9000).toString();
+};
 
 class OrderController {
-  
-  async getAllOrders(req, res) {
+  /**
+   * POST /api/orders
+   * Authenticated (requester, mailroom, admin)
+   */
+  async createOrder(req, res) {
     try {
-      const { status, customerId, deliveryType, priority, limit = 20, page = 1 } = req.query;
-      
-      // Build filter object
-      const filter = {};
-      if (status) filter.status = status;
-      if (customerId) filter.customerId = customerId;
-      if (deliveryType) filter.deliveryType = deliveryType;
-      if (priority) filter.priority = priority;
-      
-      const skip = (page - 1) * limit;
-      
-      const orders = await Order.find(filter)
-        .populate('customerId', 'name email phone')
-        .sort({ createdAt: -1 })
-        .limit(parseInt(limit))
-        .skip(skip);
-      
-      const total = await Order.countDocuments(filter);
-      
-      res.status(200).json({
+      const {
+        pickupNode,
+        dropoffNode,
+        cargoDetails,
+        priority = 'STANDARD',
+        externalTrackingId,
+        estimatedDeliveryMinutes
+      } = req.body;
+
+      if (!pickupNode || !pickupNode.hubId || !dropoffNode || !dropoffNode.hubId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Both pickupNode and dropoffNode with hubId are required'
+        });
+      }
+
+      if (!cargoDetails || !cargoDetails.itemCategory) {
+        return res.status(400).json({
+          success: false,
+          message: 'Cargo details with itemCategory are required'
+        });
+      }
+
+      // 1. Validate both hub nodes exist and are active DeliveryHubs
+      const [pickupHub, dropoffHub] = await Promise.all([
+        DeliveryHub.findOne({
+          $or: [{ hubId: pickupNode.hubId }, { code: pickupNode.hubId }, { aliases: pickupNode.hubId }],
+          isActive: true
+        }),
+        DeliveryHub.findOne({
+          $or: [{ hubId: dropoffNode.hubId }, { code: dropoffNode.hubId }, { aliases: dropoffNode.hubId }],
+          isActive: true
+        })
+      ]);
+
+      if (!pickupHub) {
+        return res.status(400).json({
+          success: false,
+          message: `Pickup node '${pickupNode.hubId}' does not exist as an active DeliveryHub`
+        });
+      }
+
+      if (!dropoffHub) {
+        return res.status(400).json({
+          success: false,
+          message: `Dropoff node '${dropoffNode.hubId}' does not exist as an active DeliveryHub`
+        });
+      }
+
+      // Fill building names if not provided
+      const resolvedPickupNode = {
+        hubId: pickupHub.hubId,
+        buildingName: pickupNode.buildingName || pickupHub.name,
+        roomNumber: pickupNode.roomNumber || '',
+        contactPhone: pickupNode.contactPhone || req.user.phone || ''
+      };
+
+      const resolvedDropoffNode = {
+        hubId: dropoffHub.hubId,
+        buildingName: dropoffNode.buildingName || dropoffHub.name,
+        roomNumber: dropoffNode.roomNumber || '',
+        recipientName: dropoffNode.recipientName || 'Campus Recipient',
+        recipientPhone: dropoffNode.recipientPhone || pickupNode.contactPhone || ''
+      };
+
+      // 2. Generate trackingId & OTP
+      let trackingId = generateTrackingId();
+      // Ensure unique trackingId
+      while (await Order.findOne({ trackingId })) {
+        trackingId = generateTrackingId();
+      }
+
+      const otp = generateOtp();
+
+      // 3. Fragile/Heavy Guardrail
+      const isFragile = Boolean(cargoDetails.isFragile);
+      const weightKg = Number(cargoDetails.weightKg) || 0;
+      const requiresAdminApproval = isFragile === true || weightKg > 50;
+      const status = requiresAdminApproval ? 'PENDING_APPROVAL' : 'PENDING';
+
+      const resolvedCargoDetails = {
+        itemCategory: cargoDetails.itemCategory,
+        description: cargoDetails.description || '',
+        weightKg: weightKg,
+        dimensionsCm: cargoDetails.dimensionsCm || { length: 0, width: 0, height: 0 },
+        isFragile: isFragile,
+        requiresAdminApproval: requiresAdminApproval,
+        specialInstructions: cargoDetails.specialInstructions || ''
+      };
+
+      // 4. Create and save order
+      const order = new Order({
+        trackingId,
+        requesterId: req.user._id,
+        status,
+        priority,
+        pickupNode: resolvedPickupNode,
+        dropoffNode: resolvedDropoffNode,
+        cargoDetails: resolvedCargoDetails,
+        externalTrackingId,
+        estimatedDeliveryMinutes: estimatedDeliveryMinutes || 30,
+        pod: {
+          otp,
+          isVerified: false
+        },
+        statusHistory: [
+          {
+            status,
+            updatedBy: req.user._id,
+            note: requiresAdminApproval
+              ? 'Order submitted and requires admin approval (fragile cargo or weight > 50kg)'
+              : 'Order submitted and pending driver assignment',
+            timestamp: new Date()
+          }
+        ]
+      });
+
+      await order.save();
+
+      res.status(201).json({
         success: true,
-        message: 'Orders retrieved successfully',
-        data: orders,
-        pagination: {
-          currentPage: parseInt(page),
-          totalPages: Math.ceil(total / limit),
-          totalOrders: total,
-          hasNext: page * limit < total,
-          hasPrev: page > 1
-        }
+        message: 'Order created successfully',
+        data: order
       });
     } catch (error) {
-      console.error('Get all orders error:', error);
+      console.error('Error creating order:', error);
       res.status(500).json({
         success: false,
-        message: 'Error retrieving orders',
+        message: 'Failed to create order',
         error: error.message
       });
     }
   }
-  
-  async createOrder(req, res) {
-    try {
-      const orderData = req.body;
-      
-      // Get customer ID from authenticated user if not provided
-      if (!orderData.customerId && req.customer) {
-        orderData.customerId = req.customer._id;
-        console.log('📋 Using authenticated customer ID for order creation');
-      }
-      
-      // Validate required fields
-      if (!orderData.customerId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Customer ID is required'
-        });
-      }
 
-      const result = await logisticsService.createOrder(orderData);
-      
-      // Email service removed - no notifications will be sent
-      console.log('📧 Order created successfully - email notifications disabled');
-      
-      res.status(201).json({
+  /**
+   * GET /api/orders
+   * Authenticated (Role-aware filtering)
+   */
+  async getOrders(req, res) {
+    try {
+      const { status, priority, limit = 50, page = 1 } = req.query;
+      const query = {};
+
+      if (status) query.status = status;
+      if (priority) query.priority = priority;
+
+      // Role-based scoping
+      if (req.user.role === 'requester') {
+        query.requesterId = req.user._id;
+      } else if (req.user.role === 'driver') {
+        const agent = await DeliveryAgent.findOne({ userId: req.user._id });
+        if (!agent) {
+          return res.status(200).json({
+            success: true,
+            count: 0,
+            data: [],
+            pagination: { currentPage: 1, totalPages: 0, totalOrders: 0 }
+          });
+        }
+        query.$or = [
+          { 'assignment.driverId': agent._id },
+          { _id: { $in: agent.assignedOrders } }
+        ];
+      }
+      // admin and mailroom see all orders matching query
+
+      const skip = (parseInt(page) - 1) * parseInt(limit);
+
+      const [orders, total] = await Promise.all([
+        Order.find(query)
+          .populate('requesterId', 'name email phone campusId department')
+          .populate('assignment.driverId', 'agentId name phone assignedZone status')
+          .populate('assignment.vehicleId', 'vehicleId name type registrationNumber maxWeightKg currentLoadKg')
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(parseInt(limit)),
+        Order.countDocuments(query)
+      ]);
+
+      res.status(200).json({
         success: true,
-        message: 'Order created successfully',
-        data: result
+        count: orders.length,
+        data: orders,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(total / parseInt(limit)),
+          totalOrders: total
+        }
       });
     } catch (error) {
-      console.error('Create order error:', error);
+      console.error('Error fetching orders:', error);
       res.status(500).json({
         success: false,
-        message: error.message
+        message: 'Failed to retrieve orders',
+        error: error.message
       });
     }
   }
 
-  async getOrder(req, res) {
+  /**
+   * GET /api/orders/analytics/summary
+   * Admin & Mailroom only
+   */
+  async getOrderAnalyticsSummary(req, res) {
     try {
-      const { orderId } = req.params;
-      
-      const order = await Order.findById(orderId)
-        .populate('customerId', 'name email phone')
-        .lean();
-      
+      const statuses = [
+        'PENDING_APPROVAL',
+        'PENDING',
+        'ASSIGNED',
+        'PICKED_UP',
+        'IN_TRANSIT',
+        'DELIVERED',
+        'DELIVERY_ATTEMPTED',
+        'RETURNED_TO_MAILROOM',
+        'CANCELLED'
+      ];
+
+      // Aggregations
+      const [statusCounts, activeCargoWeightAgg, vehicles] = await Promise.all([
+        Order.aggregate([
+          { $group: { _id: '$status', count: { $sum: 1 } } }
+        ]),
+        Order.aggregate([
+          {
+            $match: {
+              status: { $in: ['PENDING', 'ASSIGNED', 'PICKED_UP', 'IN_TRANSIT'] }
+            }
+          },
+          {
+            $group: {
+              _id: null,
+              totalActiveWeight: { $sum: '$cargoDetails.weightKg' }
+            }
+          }
+        ]),
+        DeliveryVehicle.find({ isActive: true })
+      ]);
+
+      // Map status counts
+      const countsByStatus = {};
+      statuses.forEach((s) => {
+        countsByStatus[s] = 0;
+      });
+      statusCounts.forEach((item) => {
+        if (item._id) countsByStatus[item._id] = item.count;
+      });
+
+      const totalActiveCargoWeightKg = activeCargoWeightAgg[0]?.totalActiveWeight || 0;
+
+      // Fleet utilization metrics
+      const totalVehicles = vehicles.length;
+      const inTransitVehicles = vehicles.filter((v) => v.status === 'IN_TRANSIT').length;
+      const totalCapacityKg = vehicles.reduce((sum, v) => sum + (v.maxWeightKg || 0), 0);
+      const currentLoadKg = vehicles.reduce((sum, v) => sum + (v.currentLoadKg || 0), 0);
+      const fleetUtilizationPct = totalCapacityKg > 0
+        ? Number(((currentLoadKg / totalCapacityKg) * 100).toFixed(1))
+        : 0;
+
+      res.status(200).json({
+        success: true,
+        data: {
+          statusCounts: countsByStatus,
+          totalOrders: Object.values(countsByStatus).reduce((a, b) => a + b, 0),
+          totalActiveCargoWeightKg,
+          fleet: {
+            totalVehicles,
+            inTransitVehicles,
+            availableVehicles: vehicles.filter((v) => v.status === 'AVAILABLE').length,
+            maintenanceVehicles: vehicles.filter((v) => v.status === 'MAINTENANCE').length,
+            totalCapacityKg,
+            currentLoadKg,
+            fleetUtilizationPct
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Error calculating order analytics:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to calculate analytics summary',
+        error: error.message
+      });
+    }
+  }
+
+  /**
+   * GET /api/orders/:id
+   * Single order lookup with populate
+   */
+  async getOrderById(req, res) {
+    try {
+      const { id } = req.params;
+
+      const query = mongoose.isValidObjectId(id)
+        ? { $or: [{ _id: id }, { trackingId: id }] }
+        : { trackingId: id };
+
+      const order = await Order.findOne(query)
+        .populate('requesterId', 'name email phone campusId department')
+        .populate('assignment.driverId', 'agentId name phone assignedZone status')
+        .populate('assignment.vehicleId', 'vehicleId name type registrationNumber maxWeightKg currentLoadKg');
+
       if (!order) {
         return res.status(404).json({
           success: false,
           message: 'Order not found'
         });
       }
-      
-      res.json({
+
+      // Role check: requester can only view their own orders
+      if (req.user.role === 'requester' && order.requesterId?._id.toString() !== req.user._id.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden: You do not have permission to view this order'
+        });
+      }
+
+      res.status(200).json({
         success: true,
         data: order
       });
     } catch (error) {
-      console.error('Get order error:', error);
+      console.error('Error fetching order by ID:', error);
       res.status(500).json({
         success: false,
-        message: error.message
+        message: 'Failed to retrieve order',
+        error: error.message
       });
     }
   }
 
-  async updateOrderStatus(req, res) {
+  /**
+   * PUT /api/orders/:id/approve
+   * Admin / Mailroom only: Moves order from PENDING_APPROVAL to PENDING
+   */
+  async approveOrder(req, res) {
     try {
-      const { orderId } = req.params;
-      const { status, location, remarks } = req.body;
-      
-      if (!status) {
-        return res.status(400).json({
+      const { id } = req.params;
+
+      const query = mongoose.isValidObjectId(id)
+        ? { $or: [{ _id: id }, { trackingId: id }] }
+        : { trackingId: id };
+
+      const order = await Order.findOne(query);
+
+      if (!order) {
+        return res.status(404).json({
           success: false,
-          message: 'Status is required'
+          message: 'Order not found'
         });
       }
 
-      const updatedOrder = await logisticsService.updateOrderStatus(
-        orderId, 
-        status, 
-        location, 
-        remarks
-      );
-      
-      res.json({
-        success: true,
-        message: 'Order status updated successfully',
-        data: updatedOrder
-      });
-    } catch (error) {
-      console.error('Update order status error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message
-      });
-    }
-  }
-
-  async trackOrder(req, res) {
-    try {
-      const { orderId } = req.params;
-      
-      const trackingData = await logisticsService.getOrderTracking(orderId);
-      
-      res.json({
-        success: true,
-        data: trackingData
-      });
-    } catch (error) {
-      console.error('Track order error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message
-      });
-    }
-  }
-
-  async getCustomerOrders(req, res) {
-    try {
-      const { customerId } = req.params;
-      const { page = 1, limit = 10, status } = req.query;
-      
-      const query = { customerId };
-      if (status) {
-        query.status = status;
-      }
-      
-      const orders = await Order.find(query)
-        .sort({ 'timestamps.createdAt': -1 })
-        .limit(limit * 1)
-        .skip((page - 1) * limit)
-        .populate('customerId', 'name email')
-        .lean();
-      
-      const total = await Order.countDocuments(query);
-      
-      res.json({
-        success: true,
-        data: {
-          orders,
-          pagination: {
-            current: page,
-            pages: Math.ceil(total / limit),
-            total
-          }
-        }
-      });
-    } catch (error) {
-      console.error('Get customer orders error:', error);
-      res.status(500).json({
-        success: false,
-        message: error.message
-      });
-    }
-  }
-
-  async bulkUpdateOrders(req, res) {
-    try {
-      const { orderIds, status, location, remarks } = req.body;
-      
-      if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
+      if (order.status !== 'PENDING_APPROVAL') {
         return res.status(400).json({
           success: false,
-          message: 'Order IDs array is required'
+          message: `Cannot approve order with status '${order.status}'. Only 'PENDING_APPROVAL' orders can be approved.`
         });
       }
 
-      const updatePromises = orderIds.map(orderId =>
-        logisticsService.updateOrderStatus(orderId, status, location, remarks)
-      );
+      order.status = 'PENDING';
+      if (order.cargoDetails) {
+        order.cargoDetails.requiresAdminApproval = false;
+      }
 
-      const results = await Promise.allSettled(updatePromises);
-      
-      const successful = results.filter(r => r.status === 'fulfilled').length;
-      const failed = results.filter(r => r.status === 'rejected').length;
+      order.statusHistory.push({
+        status: 'PENDING',
+        updatedBy: req.user._id,
+        note: `Approved by ${req.user.role} (${req.user.name})`,
+        timestamp: new Date()
+      });
 
-      res.json({
+      await order.save();
+
+      res.status(200).json({
         success: true,
-        message: `Bulk update completed. ${successful} successful, ${failed} failed.`,
-        data: {
-          successful,
-          failed,
-          results: failed > 0 ? results.filter(r => r.status === 'rejected').map(r => r.reason.message) : []
-        }
+        message: 'Order approved successfully and is now ready for assignment',
+        data: order
       });
     } catch (error) {
-      console.error('Bulk update orders error:', error);
+      console.error('Error approving order:', error);
       res.status(500).json({
         success: false,
-        message: error.message
+        message: 'Failed to approve order',
+        error: error.message
       });
     }
   }
 
-  async getOrderAnalytics(req, res) {
+  /**
+   * PUT /api/orders/:id/assign
+   * Admin / Mailroom: Assign driver & vehicle with strict guardrails
+   */
+  async assignOrder(req, res) {
     try {
-      const { startDate, endDate, status } = req.query;
-      
-      let matchStage = {};
-      
-      if (startDate || endDate) {
-        matchStage['timestamps.createdAt'] = {};
-        if (startDate) matchStage['timestamps.createdAt'].$gte = new Date(startDate);
-        if (endDate) matchStage['timestamps.createdAt'].$lte = new Date(endDate);
-      }
-      
-      if (status) {
-        matchStage.status = status;
+      const { id } = req.params;
+      const { driverId, vehicleId } = req.body;
+
+      if (!driverId || !vehicleId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Both driverId and vehicleId are required'
+        });
       }
 
-      const analytics = await Order.aggregate([
-        { $match: matchStage },
-        {
-          $group: {
-            _id: null,
-            totalOrders: { $sum: 1 },
-            totalValue: { $sum: '$paymentDetails.totalValue' },
-            avgDeliveryTime: { 
-              $avg: {
-                $divide: [
-                  { $subtract: ['$timestamps.deliveredAt', '$timestamps.createdAt'] },
-                  1000 * 60 * 60 * 24 // Convert to days
-                ]
-              }
-            },
-            ordersByStatus: {
-              $push: {
-                status: '$status',
-                count: 1
-              }
-            },
-            ordersByType: {
-              $push: {
-                type: '$orderType',
-                count: 1
-              }
-            }
-          }
-        }
+      // Find order
+      const orderQuery = mongoose.isValidObjectId(id)
+        ? { $or: [{ _id: id }, { trackingId: id }] }
+        : { trackingId: id };
+
+      const order = await Order.findOne(orderQuery);
+      if (!order) {
+        return res.status(404).json({
+          success: false,
+          message: 'Order not found'
+        });
+      }
+
+      // Guardrail 1: Approval Check
+      if (order.status === 'PENDING_APPROVAL') {
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot assign order pending approval. Please approve the order first.'
+        });
+      }
+
+      // Find driver & vehicle
+      const driverQuery = mongoose.isValidObjectId(driverId)
+        ? { $or: [{ _id: driverId }, { agentId: driverId }] }
+        : { agentId: driverId };
+
+      const vehicleQuery = mongoose.isValidObjectId(vehicleId)
+        ? { $or: [{ _id: vehicleId }, { vehicleId }] }
+        : { vehicleId };
+
+      const [driver, vehicle] = await Promise.all([
+        DeliveryAgent.findOne(driverQuery),
+        DeliveryVehicle.findOne(vehicleQuery)
       ]);
 
-      // Get status distribution
-      const statusDistribution = await Order.aggregate([
-        { $match: matchStage },
-        {
-          $group: {
-            _id: '$status',
-            count: { $sum: 1 }
-          }
-        }
+      if (!driver) {
+        return res.status(404).json({
+          success: false,
+          message: `Delivery agent '${driverId}' not found`
+        });
+      }
+
+      if (!vehicle) {
+        return res.status(404).json({
+          success: false,
+          message: `Delivery vehicle '${vehicleId}' not found`
+        });
+      }
+
+      // Guardrail 2: Pedestrian/Zone Accessibility Check
+      const [pickupHub, dropoffHub] = await Promise.all([
+        DeliveryHub.findOne({
+          $or: [{ hubId: order.pickupNode.hubId }, { code: order.pickupNode.hubId }, { aliases: order.pickupNode.hubId }]
+        }),
+        DeliveryHub.findOne({
+          $or: [{ hubId: order.dropoffNode.hubId }, { code: order.dropoffNode.hubId }, { aliases: order.dropoffNode.hubId }]
+        })
       ]);
 
-      // Get daily order trends
-      const dailyTrends = await Order.aggregate([
-        { $match: matchStage },
+      if (!pickupHub || !dropoffHub) {
+        return res.status(400).json({
+          success: false,
+          message: 'Pickup or dropoff hub not found for accessibility validation'
+        });
+      }
+
+      if (!pickupHub.accessibleBy.includes(vehicle.type)) {
+        return res.status(400).json({
+          success: false,
+          message: `Vehicle type '${vehicle.type}' is restricted at pickup building '${pickupHub.name}' (${pickupHub.hubId}). Accessible by: ${pickupHub.accessibleBy.join(', ')}`
+        });
+      }
+
+      if (!dropoffHub.accessibleBy.includes(vehicle.type)) {
+        return res.status(400).json({
+          success: false,
+          message: `Vehicle type '${vehicle.type}' is restricted at dropoff building '${dropoffHub.name}' (${dropoffHub.hubId}). Accessible by: ${dropoffHub.accessibleBy.join(', ')}`
+        });
+      }
+
+      // Guardrail 3: Atomic Weight Capacity Check
+      const orderWeight = order.cargoDetails?.weightKg || 0;
+
+      const updatedVehicle = await DeliveryVehicle.findOneAndUpdate(
         {
-          $group: {
-            _id: {
-              $dateToString: { format: '%Y-%m-%d', date: '$timestamps.createdAt' }
-            },
-            orders: { $sum: 1 },
-            revenue: { $sum: '$paymentDetails.totalValue' }
+          _id: vehicle._id,
+          status: { $ne: 'MAINTENANCE' },
+          $expr: {
+            $lte: [{ $add: ['$currentLoadKg', orderWeight] }, '$maxWeightKg']
           }
         },
-        { $sort: { '_id': 1 } }
-      ]);
+        {
+          $inc: { currentLoadKg: orderWeight },
+          $addToSet: { assignedOrders: order._id }
+        },
+        { new: true }
+      );
 
-      res.json({
+      if (!updatedVehicle) {
+        return res.status(400).json({
+          success: false,
+          message: 'Vehicle capacity exceeded or unavailable'
+        });
+      }
+
+      // Update Order Assignment
+      order.assignment = {
+        driverId: driver._id,
+        vehicleId: vehicle._id,
+        assignedAt: new Date()
+      };
+      order.status = 'ASSIGNED';
+      order.statusHistory.push({
+        status: 'ASSIGNED',
+        updatedBy: req.user._id,
+        note: `Assigned to driver ${driver.name} with vehicle ${vehicle.name} (${vehicle.type})`,
+        timestamp: new Date()
+      });
+
+      await order.save();
+
+      // Update Driver assignedOrders and status
+      await DeliveryAgent.findByIdAndUpdate(driver._id, {
+        $addToSet: { assignedOrders: order._id },
+        assignedVehicleId: vehicle.vehicleId,
+        status: 'ON_DELIVERY'
+      });
+
+      res.status(200).json({
         success: true,
-        data: {
-          summary: analytics[0] || {},
-          statusDistribution,
-          dailyTrends
-        }
+        message: 'Order assigned successfully',
+        data: order
       });
     } catch (error) {
-      console.error('Get order analytics error:', error);
+      console.error('Error assigning order:', error);
       res.status(500).json({
         success: false,
-        message: error.message
+        message: 'Failed to assign order',
+        error: error.message
+      });
+    }
+  }
+
+  /**
+   * PUT /api/orders/:id/status
+   * Driver, Admin, Mailroom: Status updates & OTP Proof of Delivery
+   */
+  async updateOrderStatus(req, res) {
+    try {
+      const { id } = req.params;
+      const { status, otp, deliveryNotes, failedReason } = req.body;
+
+      const allowedStatuses = [
+        'PICKED_UP',
+        'IN_TRANSIT',
+        'DELIVERED',
+        'DELIVERY_ATTEMPTED',
+        'RETURNED_TO_MAILROOM',
+        'CANCELLED'
+      ];
+
+      if (!status || !allowedStatuses.includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid status. Allowed statuses: ${allowedStatuses.join(', ')}`
+        });
+      }
+
+      // Find order
+      const orderQuery = mongoose.isValidObjectId(id)
+        ? { $or: [{ _id: id }, { trackingId: id }] }
+        : { trackingId: id };
+
+      const order = await Order.findOne(orderQuery);
+      if (!order) {
+        return res.status(404).json({
+          success: false,
+          message: 'Order not found'
+        });
+      }
+
+      // Driver authorization check
+      if (req.user.role === 'driver') {
+        const agent = await DeliveryAgent.findOne({ userId: req.user._id });
+        if (!agent || !order.assignment?.driverId || order.assignment.driverId.toString() !== agent._id.toString()) {
+          return res.status(403).json({
+            success: false,
+            message: 'Forbidden: You are only authorized to update orders assigned to you'
+          });
+        }
+      }
+
+      // Guardrail 4: OTP Proof of Delivery
+      if (status === 'DELIVERED') {
+        if (!otp || String(otp).trim() !== String(order.pod?.otp).trim()) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid Proof of Delivery OTP'
+          });
+        }
+
+        order.pod.isVerified = true;
+        order.pod.verifiedAt = new Date();
+        if (deliveryNotes) order.pod.deliveryNotes = deliveryNotes;
+
+        // Atomically release vehicle load
+        if (order.assignment?.vehicleId) {
+          const weightToRelease = order.cargoDetails?.weightKg || 0;
+          await DeliveryVehicle.findByIdAndUpdate(order.assignment.vehicleId, {
+            $inc: { currentLoadKg: -weightToRelease },
+            $pull: { assignedOrders: order._id }
+          });
+        }
+
+        // Release order from driver
+        if (order.assignment?.driverId) {
+          await DeliveryAgent.findByIdAndUpdate(order.assignment.driverId, {
+            $pull: { assignedOrders: order._id }
+          });
+        }
+      }
+
+      // Guardrail 5: Failed Delivery Reason
+      if (status === 'DELIVERY_ATTEMPTED' || status === 'RETURNED_TO_MAILROOM') {
+        if (!failedReason || !failedReason.trim()) {
+          return res.status(400).json({
+            success: false,
+            message: 'Failed reason is required for delivery attempted or returned to mailroom status'
+          });
+        }
+        order.pod.failedReason = failedReason.trim();
+      }
+
+      order.status = status;
+      order.statusHistory.push({
+        status,
+        updatedBy: req.user._id,
+        note: deliveryNotes || failedReason || `Status updated to ${status}`,
+        timestamp: new Date()
+      });
+
+      await order.save();
+
+      res.status(200).json({
+        success: true,
+        message: `Order status updated to '${status}' successfully`,
+        data: order
+      });
+    } catch (error) {
+      console.error('Error updating order status:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to update order status',
+        error: error.message
       });
     }
   }

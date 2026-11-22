@@ -2,85 +2,73 @@ const jwt = require('jsonwebtoken');
 const Customer = require('../models/Customer');
 const config = require('../utils/config');
 
-// JWT Authentication Middleware
-exports.authenticate = async (req, res, next) => {
+/**
+ * JWT Authentication Middleware
+ * Verifies Bearer token and attaches req.user (Customer document without password)
+ */
+const protect = async (req, res, next) => {
   try {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
-    
+    let token;
+
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
+    } else if (req.cookies && req.cookies.token) {
+      token = req.cookies.token;
+    }
+
     if (!token) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Access denied. No token provided.' 
+      return res.status(401).json({
+        success: false,
+        message: 'Access denied. No token provided.'
       });
     }
 
     const decoded = jwt.verify(token, config.SECRET_KEY);
-    const customer = await Customer.findById(decoded.id);
-    
-    if (!customer) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Invalid token. Customer not found.' 
+    const user = await Customer.findById(decoded.id).select('-password');
+
+    if (!user || !user.isActive) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid token or inactive user account.'
       });
     }
 
-    req.customer = customer;
+    req.user = user;
+    req.customer = user; // Backwards compatibility
     next();
   } catch (error) {
-    res.status(401).json({ 
-      success: false, 
-      message: 'Invalid token.' 
+    return res.status(401).json({
+      success: false,
+      message: 'Invalid or expired token.'
     });
   }
 };
 
-// Session-based Authentication (for compatibility with existing auth-server)
-exports.isAuthenticated = async (req, res, next) => {
-  if (req.isAuthenticated && req.isAuthenticated()) {
-    console.log("User is authenticated");
-    return next();
-  } else {
-    console.log("User is not authenticated");
-    return res.status(401).json({ message: "User is not authenticated" });
-  }
+/**
+ * Strict Role-Based Access Control (RBAC) Middleware
+ * Checks if req.user.role matches allowed roles, otherwise returns 403 Forbidden
+ */
+const authorizeRoles = (...roles) => {
+  return (req, res, next) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: `Forbidden: Role '${req.user?.role || 'unknown'}' is not authorized to access this resource.`
+      });
+    }
+    next();
+  };
 };
 
-// Admin Authorization
-exports.isAdmin = (req, res, next) => {
-  if (req.customer && (req.customer.role === 'admin' || req.customer.role === 'sub-admin')) {
-    return next();
-  } else if (req.isAuthenticated && req.isAuthenticated() && 
-             (req.user.role === 'admin' || req.user.role === 'sub-admin')) {
-    return next();
-  } else {
-    res.status(403).json({ message: 'Access denied. Admin role required.' });
-  }
-};
+// Aliases for compatibility
+const authenticate = protect;
+const authorize = authorizeRoles;
+const isAdmin = authorizeRoles('admin');
 
-// Auth User (for compatibility)
-exports.authUser = function (req, res) {
-  if (req.customer) {
-    // JWT-based authentication
-    res.status(200).json({ 
-      authenticated: true, 
-      customer: req.customer 
-    });
-  } else if (req.isAuthenticated && req.isAuthenticated()) {
-    // Session-based authentication
-    res.status(200).json({ 
-      authenticated: true, 
-      user: req.user 
-    });
-  } else {
-    res.status(401).json({ authenticated: false });
-  }
-};
-
-// Optional: Customer role check
-exports.isCustomer = (req, res, next) => {
-  if (req.customer && req.customer.role === 'customer') {
-    return next();
-  } else {
-    res.status(403).json({ message: 'Access denied. Customer role required.' });
-  }
+module.exports = {
+  protect,
+  authenticate,
+  authorizeRoles,
+  authorize,
+  isAdmin
 };
