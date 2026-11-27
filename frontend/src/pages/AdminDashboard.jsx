@@ -1366,8 +1366,8 @@ const AdminDashboard = () => {
                         <input
                           type="number"
                           required
-                          min="10"
-                          max="2000"
+                          min="1"
+                          step="any"
                           value={vehicleForm.maxWeightKg}
                           onChange={(e) => setVehicleForm({ ...vehicleForm, maxWeightKg: e.target.value })}
                           className="w-full p-2 bg-white border border-slate-200 rounded-lg"

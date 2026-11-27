@@ -390,11 +390,12 @@ const RequesterDashboard = () => {
                 <input
                   type="number"
                   name="weightKg"
-                  min="0.1"
-                  step="0.5"
+                  min="0.01"
+                  step="any"
                   value={formData.weightKg}
                   onChange={handleInputChange}
                   required
+                  placeholder="e.g. 5"
                   className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
                 />
               </div>
