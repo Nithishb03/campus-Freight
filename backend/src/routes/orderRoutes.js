@@ -47,4 +47,18 @@ router.put(
   (req, res) => orderController.updateOrderStatus(req, res)
 );
 
+// 8. Cancel Order (requester before pickup, admin/mailroom anytime before delivery)
+router.put(
+  '/:id/cancel',
+  authorizeRoles('requester', 'mailroom', 'admin'),
+  (req, res) => orderController.cancelOrder(req, res)
+);
+
+// 9. Reassign Fleet Driver & Vehicle (admin, mailroom)
+router.put(
+  '/:id/reassign',
+  authorizeRoles('admin', 'mailroom'),
+  (req, res) => orderController.reassignOrder(req, res)
+);
+
 module.exports = router;

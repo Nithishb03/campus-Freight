@@ -31,6 +31,13 @@ const demoAccounts = [
     email: 'driver1@campus.edu',
     password: 'Password@123',
     badge: 'bg-amber-100 text-amber-800 border-amber-200'
+  },
+  {
+    role: 'Driver 2',
+    name: 'Suresh Patel (Fleet)',
+    email: 'driver2@campus.edu',
+    password: 'Password@123',
+    badge: 'bg-cyan-100 text-cyan-800 border-cyan-200'
   }
 ];
 

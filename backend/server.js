@@ -1,4 +1,6 @@
 const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const session = require('express-session');
@@ -17,6 +19,7 @@ const docsRoutes = require('./src/routes/docsRoutes');
 const deliveryController = require('./src/controllers/deliveryController');
 
 const app = express();
+const server = http.createServer(app);
 const PORT = config.PORT || 3000;
 
 // CORS configuration supporting frontend URL
@@ -25,6 +28,34 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000'
 ];
+
+// Initialize Socket.io with cross-origin support
+const io = new Server(server, {
+  cors: {
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(null, true);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE']
+  }
+});
+
+// Attach Socket.io instance to app for controllers
+app.set('io', io);
+
+io.on('connection', (socket) => {
+  if (config.NODE_ENV === 'development') {
+    console.log(`🔌 Client connected to Socket.io [id: ${socket.id}]`);
+  }
+  socket.on('disconnect', () => {
+    if (config.NODE_ENV === 'development') {
+      console.log(`🔌 Client disconnected [id: ${socket.id}]`);
+    }
+  });
+});
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -122,6 +153,7 @@ app.get('/api/nodes/:hubId', (req, res) => deliveryController.getCampusNodeById(
 app.use('/api/auth', authRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/delivery', deliveryRoutes);
+app.use('/api', deliveryRoutes); // Supports /api/vehicles and /api/nodes direct routes
 app.use('/api/ai', aiRoutes);
 app.use('/api/docs', docsRoutes);
 
@@ -152,13 +184,16 @@ process.on('SIGINT', async () => {
 });
 
 if (require.main === module) {
-  app.listen(PORT, () => {
+  server.listen(PORT, () => {
     console.log(`🚀 Campus Freight Server running on port ${PORT}`);
     console.log(`📱 Health check: http://localhost:${PORT}/health`);
     console.log(`📚 API Docs: http://localhost:${PORT}/api/docs`);
+    console.log(`⚡ Real-time Socket.io active`);
   });
 }
 
 module.exports = app;
+module.exports.server = server;
+module.exports.io = io;
 module.exports.connectDatabase = connectDatabase;
 module.exports.getMongoMemoryServer = () => mongoMemoryServer;

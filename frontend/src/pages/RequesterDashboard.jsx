@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import api from '../api/client';
+import socket from '../api/socket';
 import { useAuth } from '../context/AuthContext';
+import generateWaybillPdf from '../utils/waybillPdf';
 import {
   Package,
   Sparkles,
@@ -11,7 +13,12 @@ import {
   CheckCircle2,
   MapPin,
   RefreshCw,
-  Info
+  Info,
+  History,
+  XCircle,
+  X,
+  Bell,
+  FileText
 } from 'lucide-react';
 
 const ITEM_CATEGORIES = [
@@ -39,6 +46,9 @@ const RequesterDashboard = () => {
   const [nodes, setNodes] = useState([]);
   const [orders, setOrders] = useState([]);
   const [loadingOrders, setLoadingOrders] = useState(true);
+  const [toastMessage, setToastMessage] = useState(null);
+  const [timelineOrder, setTimelineOrder] = useState(null);
+  const [cancellingId, setCancellingId] = useState(null);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -86,6 +96,49 @@ const RequesterDashboard = () => {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Socket.io Real-Time Synchronization
+  useEffect(() => {
+    const handleOrderUpdated = (data) => {
+      loadData();
+      const trk = data?.order?.trackingId || 'Shipment';
+      const st = data?.order?.status?.replace('_', ' ') || 'updated';
+      setToastMessage({ text: `⚡ Live Update: ${trk} is now ${st}`, type: 'info' });
+    };
+
+    socket.on('order:updated', handleOrderUpdated);
+
+    return () => {
+      socket.off('order:updated', handleOrderUpdated);
+    };
+  }, []);
+
+  // Auto-dismiss toast
+  useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => setToastMessage(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toastMessage]);
+
+  // Cancel order handler
+  const handleCancel = async (order) => {
+    const confirmCancel = window.confirm(`Are you sure you want to cancel order ${order.trackingId}?`);
+    if (!confirmCancel) return;
+
+    setCancellingId(order._id);
+    try {
+      await api.put(`/orders/${order._id}/cancel`, {
+        reason: 'Cancelled by requester'
+      });
+      setToastMessage({ text: `Order ${order.trackingId} cancelled successfully.`, type: 'info' });
+      await loadData();
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to cancel order.');
+    } finally {
+      setCancellingId(null);
+    }
+  };
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -168,6 +221,22 @@ const RequesterDashboard = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="p-3 rounded-xl border border-blue-200 bg-blue-50 text-blue-900 text-xs font-semibold flex items-center justify-between shadow-md animate-in fade-in duration-200">
+          <div className="flex items-center gap-2">
+            <Bell className="w-4 h-4 text-blue-600 animate-bounce" />
+            <span>{toastMessage.text}</span>
+          </div>
+          <button
+            onClick={() => setToastMessage(null)}
+            className="text-slate-400 hover:text-slate-600 p-1"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
@@ -467,11 +536,13 @@ const RequesterDashboard = () => {
                     <th className="py-2.5 px-3">Cargo</th>
                     <th className="py-2.5 px-3">Status</th>
                     <th className="py-2.5 px-3 text-center">PoD OTP</th>
+                    <th className="py-2.5 px-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {orders.map((order) => {
                     const statusMeta = statusStyles[order.status] || statusStyles.PENDING;
+                    const canCancel = ['PENDING_APPROVAL', 'PENDING', 'ASSIGNED'].includes(order.status);
                     return (
                       <tr key={order._id} className="hover:bg-slate-50/80 transition">
                         {/* Tracking ID */}
@@ -531,6 +602,40 @@ const RequesterDashboard = () => {
                             </div>
                           )}
                         </td>
+
+                        {/* Actions */}
+                        <td className="py-3 px-3 text-right space-x-1 whitespace-nowrap">
+                          {/* Waybill / Receipt PDF */}
+                          <button
+                            onClick={() => generateWaybillPdf(order)}
+                            title="Download Printable PDF Waybill / Receipt"
+                            className="p-1 rounded-md text-xs font-semibold text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 transition cursor-pointer inline-flex items-center gap-1"
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                            <span>PDF</span>
+                          </button>
+
+                          <button
+                            onClick={() => setTimelineOrder(order)}
+                            title="View Audit Timeline"
+                            className="p-1 rounded-md text-xs font-semibold text-slate-500 hover:text-blue-600 hover:bg-slate-100 transition cursor-pointer inline-flex items-center gap-1"
+                          >
+                            <History className="w-3.5 h-3.5" />
+                            <span>Timeline</span>
+                          </button>
+
+                          {canCancel && (
+                            <button
+                              onClick={() => handleCancel(order)}
+                              disabled={cancellingId === order._id}
+                              title="Cancel Request"
+                              className="p-1 rounded-md text-xs font-semibold text-red-500 hover:text-red-700 hover:bg-red-50 transition cursor-pointer inline-flex items-center gap-0.5"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              <span>{cancellingId === order._id ? '...' : 'Cancel'}</span>
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
@@ -540,6 +645,70 @@ const RequesterDashboard = () => {
           )}
         </div>
       </div>
+
+      {/* View Timeline Modal */}
+      {timelineOrder && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-lg w-full p-6 space-y-4 animate-in fade-in max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                  <History className="w-4 h-4 text-blue-600" />
+                  <span>Shipment Status Timeline</span>
+                </h3>
+                <span className="text-xs text-blue-600 font-mono font-bold">
+                  {timelineOrder.trackingId}
+                </span>
+              </div>
+              <button
+                onClick={() => setTimelineOrder(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto space-y-3 pr-1 text-xs">
+              {(!timelineOrder.statusHistory || timelineOrder.statusHistory.length === 0) ? (
+                <div className="py-8 text-center text-slate-400">No status updates recorded yet</div>
+              ) : (
+                <div className="relative pl-6 space-y-6 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
+                  {timelineOrder.statusHistory.map((item, index) => (
+                    <div key={item._id || index} className="relative group">
+                      <span className="absolute -left-6 top-1 w-3 h-3 rounded-full bg-blue-600 ring-4 ring-white"></span>
+                      <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-900 px-2 py-0.5 rounded-full text-[10px] bg-white border border-slate-200">
+                            {item.status?.replace('_', ' ')}
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            {new Date(item.timestamp).toLocaleString()}
+                          </span>
+                        </div>
+                        {item.note && (
+                          <p className="text-slate-600 text-[11px] font-medium pt-1">
+                            {item.note}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="pt-2 border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setTimelineOrder(null)}
+                className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../api/client';
+import socket from '../api/socket';
 import CampusMap3D from '../components/CampusMap3D';
 import {
   Truck,
@@ -13,12 +14,14 @@ import {
   X,
   RefreshCw,
   Flame,
-  ArrowRight
+  ArrowRight,
+  Bell
 } from 'lucide-react';
 
 const DriverDashboard = () => {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [toastMessage, setToastMessage] = useState(null);
 
   // Route optimization state
   const [optimizing, setOptimizing] = useState(false);
@@ -53,6 +56,36 @@ const DriverDashboard = () => {
   useEffect(() => {
     loadDriverOrders();
   }, []);
+
+  // Socket.io Real-Time Synchronization
+  useEffect(() => {
+    const handleOrderUpdated = (data) => {
+      loadDriverOrders();
+      const trk = data?.order?.trackingId || 'Order';
+      const st = data?.order?.status?.replace('_', ' ') || 'updated';
+      setToastMessage({ text: `⚡ Delivery Update: ${trk} status changed to ${st}`, type: 'info' });
+    };
+
+    const handleFleetUpdated = () => {
+      loadDriverOrders();
+    };
+
+    socket.on('order:updated', handleOrderUpdated);
+    socket.on('fleet:updated', handleFleetUpdated);
+
+    return () => {
+      socket.off('order:updated', handleOrderUpdated);
+      socket.off('fleet:updated', handleFleetUpdated);
+    };
+  }, []);
+
+  // Auto-dismiss toast
+  useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => setToastMessage(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toastMessage]);
 
   // Optimize Route Button
   const handleOptimizeRoute = async () => {
@@ -138,6 +171,22 @@ const DriverDashboard = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="p-3 rounded-xl border border-blue-200 bg-blue-50 text-blue-900 text-xs font-semibold flex items-center justify-between shadow-md animate-in fade-in duration-200">
+          <div className="flex items-center gap-2">
+            <Bell className="w-4 h-4 text-blue-600 animate-bounce" />
+            <span>{toastMessage.text}</span>
+          </div>
+          <button
+            onClick={() => setToastMessage(null)}
+            className="text-slate-400 hover:text-slate-600 p-1"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
